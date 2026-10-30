@@ -336,7 +336,7 @@ class LaneBridge:
         self._inbound_worker_lock = threading.RLock()
         self._inbound_processing = threading.Event()
         # Ported from agent2telegram attach.py::__init__ (MIT).
-        self._last_pane_warning = 0.0
+        self._last_pane_warning = float("-inf")
 
     # Ported from agent2telegram attach.py (MIT).
     def _ensure_inbox(self):
