@@ -1,0 +1,18 @@
+{
+  "agent": "claude-code",
+  "token": "PASTE-YOUR-TELEGRAM-BOT-TOKEN-HERE",
+  "allowed_user_ids": [123456789],
+  "bot_username": "your_bot_username",
+  "elevenlabs_api_key": "",
+  "elevenlabs_language": "",
+  "tts_voice_id": "21m00Tcm4TlvDq8ikWAM",
+  "tts_speed": 1.25,
+  "max_live_lanes": 4,
+  "idle_compact_minutes": 45,
+  "compact_min_tokens": 30000,
+  "claude_cmd": "claude --dangerously-skip-permissions",
+  "codex_cmd": "codex -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox",
+  "workdir": "",
+  "background_progress": false,
+  "inbound_sender_label": false
+}
