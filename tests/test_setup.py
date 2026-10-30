@@ -97,6 +97,13 @@ def test_claude_choice_prepares_per_session_hooks_without_touching_global_settin
     hooks = json.loads(hooks_settings_file("example_bot", tmp_path).read_text())
     assert set(hooks["hooks"]) == {"Stop", "SessionStart"}
     assert load_config(tmp_path)["agent"] == "claude-code"
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_setup_installs_the_topic_naming_skill_for_the_chosen_agent(tmp_path, monkeypatch):
+    Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="linux") == 0
+    assert "topic-edit" in (tmp_path / ".codex/skills/telegram-topic/SKILL.md").read_text()
     assert not (tmp_path / ".claude").exists()
 
 

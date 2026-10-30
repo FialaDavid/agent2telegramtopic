@@ -189,14 +189,30 @@ def lane_state_file(bot_name: str, chat_id: int, thread_id: int, kind: str, home
     return directory if filename is None else directory / filename
 
 
+def claude_rate_limits_file(bot_name: str, home: Path | None = None) -> Path:
+    return state_dir(home) / f"{bot_name}.claude_rate_limits.json"
+
+
+def cli_command(python: str) -> str:
+    """Shell prefix that runs this package's CLI: ``<prefix> topic-edit ...``."""
+    repo_root = Path(agent2telegramtopic.__file__).resolve().parent.parent
+    return f"PYTHONPATH={shlex.quote(str(repo_root))} {shlex.quote(python)} -m agent2telegramtopic"
+
+
 def write_hooks_settings(path: Path, python: str, bot_name: str, lane_root: Path | None = None) -> None:
     repo_root = Path(agent2telegramtopic.__file__).resolve().parent.parent
     command = f"PYTHONPATH={shlex.quote(str(repo_root))} {shlex.quote(python)} -m agent2telegramtopic.hook --bot {shlex.quote(bot_name)}"
     if lane_root is not None:
         command += f" --lanes-root {shlex.quote(str(lane_root))}"
-    settings = {"hooks": {
-        "Stop": [{"hooks": [{"type": "command", "command": command}]}],
-        "SessionStart": [{"hooks": [{"type": "command", "command": command}]}],
-    }}
+    # The statusLine records rate limits for /usage; it replaces the user's own statusLine in bridge sessions.
+    limits_file = path.with_name(f"{bot_name}.claude_rate_limits.json")
+    settings = {
+        "hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": command}]}],
+            "SessionStart": [{"hooks": [{"type": "command", "command": command}]}],
+        },
+        "statusLine": {"type": "command",
+                       "command": f"{cli_command(python)} statusline {shlex.quote(str(limits_file))}"},
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n")

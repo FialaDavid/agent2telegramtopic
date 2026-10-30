@@ -15,6 +15,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import threading
@@ -24,12 +25,12 @@ from datetime import datetime, timezone
 
 from .background import SubagentWatcher, _epoch as _record_wall_time
 from .durable import DurableInbox, DurableOutbox
-from .config import save_elevenlabs_key
+from .config import claude_rate_limits_file, cli_command, save_elevenlabs_key
 from .inbound import sender_label
 from .redaction import message_metadata, update_metadata
 from .routing import LaneKey
 from .telegram import split_message
-from . import readers, transcript, tts
+from . import readers, transcript, tts, usage
 from .session import BLOCKED_BY_OVERLAY, SessionError
 
 log = logging.getLogger(__name__)
@@ -39,12 +40,18 @@ BOT_COMMANDS = [
     {"command": "start", "description": "Intro and what you can send"},
     {"command": "help", "description": "Intro and what you can send"},
     {"command": "status", "description": "Bridge health and queue status"},
+    {"command": "usage", "description": "Model usage limits"},
     {"command": "new", "description": "Start a fresh conversation"},
     {"command": "setkey", "description": "Enable voice (your ElevenLabs API key)"},
     {"command": "voice", "description": "Toggle spoken (voice-note) replies"},
     {"command": "id", "description": "Show your Telegram id"},
     {"command": "close", "description": "Park this topic's session"},
 ]
+
+NEW_TOPIC_HINT = (
+    "\n\n(New topic: name it after the subject of this message with a short name in the user's "
+    "language and an allowed icon emoji, by running: {command} topic-edit \"<name>\" \"<emoji>\" "
+    "-- then answer the message normally.)")
 
 # Turn-half deltas from agent2telegram attach.py (MIT):
 # (1) Telegram sends use LaneTelegram, adding message_thread_id for this LaneKey.
@@ -608,9 +615,15 @@ class LaneBridge:
         text = self._limit_inbound_prompt(text, self.key.chat_id)
         if not text:
             return True
+        # Only the multiplexer sets this, for a topic it has just seen created (never after /new).
+        name_topic_pending = getattr(self, "_name_topic_pending", False)
+        if name_topic_pending:
+            text += NEW_TOPIC_HINT.format(command=cli_command(sys.executable))
         try:
             self._begin_turn()
             delivered = self._inject(text)
+            if delivered and name_topic_pending:
+                self._name_topic_pending = False
             if not delivered:
                 self._turn_active.clear()
                 if self._lane_store is not None:
@@ -635,13 +648,16 @@ class LaneBridge:
                 f"👋 You're connected to a live *{agent}* session via Agent2TelegramTopic.\n\n"
                 "Just send a message — it goes straight to the agent. You can also send photos and files.\n\n"
                 f"🎤 Voice transcription: {voice}.\n\n"
-                "Commands: /help · /status · /new · /id · /setkey · /voice · /close")
+                "Commands: /help · /status · /usage · /new · /id · /setkey · /voice · /close")
             return True
         if cmd == "id":
             self.tg.send_message(chat_id, f"Your Telegram id: `{chat_id}`")
             return True
         if cmd == "status":
             self.tg.send_message(chat_id, self._status_text(agent), parse_mode=None)
+            return True
+        if cmd == "usage":
+            self.tg.send_message(chat_id, self._usage_text(agent), parse_mode=None)
             return True
         if cmd == "new":
             return self._cmd_new(chat_id)
@@ -702,6 +718,13 @@ class LaneBridge:
             f"• Durable outbox: {pending_out if pending_out is not None else 'unavailable'} chunks pending",
             f"• Heartbeat: {self._age_str(self._mtime_age(self._heartbeat))} ago",
             f"• Voice replies: {'on' if self._voice_reply_on() else 'off'}; transcription: {'on' if self._elevenlabs_key() else 'off'}"))
+
+    def _usage_text(self, agent_label):
+        if self.agent == "codex":
+            found = usage.read_codex_limits(self._transcript, self.codex_sessions_root)
+        else:
+            found = usage.read_claude_limits(claude_rate_limits_file(getattr(self, "bot_name", "")))
+        return usage.format_usage(agent_label, found, time.time())
 
     def _set_voice_key(self, key, chat_id, message_id):
         if not key:

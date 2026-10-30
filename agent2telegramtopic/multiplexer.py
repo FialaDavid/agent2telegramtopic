@@ -537,7 +537,14 @@ class Multiplexer:
         # Delta (a): route to the selected LaneBridge's LaneKey-scoped durable inbox.
         try:
             with self._lane_lock:
+                # A topic with no stored lane row has just been created; /new and /clear in an
+                # existing topic keep their row, so they never trigger the naming hint.
+                is_new_topic = (self.lane_store is not None
+                                and key.thread_id != routing.GENERAL_THREAD_ID
+                                and self.lane_store.get(key) is None)
                 lane = self._lane(key)
+                if is_new_topic:
+                    lane._name_topic_pending = True
         except Exception:
             self.log.exception("could not start lane %s; not advancing the offset", key)
             return offset

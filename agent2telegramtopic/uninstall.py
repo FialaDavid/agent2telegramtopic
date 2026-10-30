@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import service
 from .config import app_dir
+from .skills import remove_skills
 
 
 def _stop_tmux(home: Path | None) -> None:
@@ -56,6 +57,8 @@ def main(argv=None, home: Path | None = None, platform: str = sys.platform) -> i
         shutil.rmtree(root)
         print(f"  ✓ removed {root}")
     base = home or Path.home()
+    for removed in remove_skills(base):
+        print(f"  ✓ removed {removed}")
     _remove_launcher(base)
     source = base / ".agent2telegramtopic-src"
     if source.is_dir() and not source.is_symlink() and (source / "agent2telegramtopic").is_dir():

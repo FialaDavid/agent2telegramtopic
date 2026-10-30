@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import service
 from .config import config_file, hooks_settings_file, lanes_root, save_config, write_hooks_settings
+from .skills import install_skill
 from .telegram import TelegramClient, TelegramError
 
 AGENTS = {"claude-code": ("Claude Code", "claude"), "codex": ("Codex", "codex")}
@@ -165,6 +166,7 @@ def run(home: Path | None = None, client_factory=TelegramClient, platform: str =
         print("  ✓ Claude Code hooks are passed per session with --settings; ~/.claude is not modified.")
     else:
         print("  ✓ Codex needs no hook; turn boundaries come from its rollout log.")
+    print(f"  ✓ {install_skill(agent, home)}")
     if _yes("\nInstall and start the background service now?", default_yes=True):
         try:
             where = service.install(platform, home=home, path=_service_path(agent))

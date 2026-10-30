@@ -204,26 +204,6 @@ def test_duplicate_update_id_is_processed_once(tmp_path):
     assert lanes[LaneKey(123, 10)]._session.injected == ["hello"]
 
 
-def test_new_topic_messages_are_injected_unchanged(tmp_path):
-    from agent2telegramtopic.state import LaneStore
-
-    client = Client()
-    lanes = {}
-    store = LaneStore(tmp_path / "lanes.db")
-    mux, _ = make_mux(tmp_path, client, lanes)
-    mux.lane_store = store
-    mux.max_live = 4
-    mux._start_slot_manager()
-    mux._handle_update_once(update(1, 10, text="first message"), 0)
-    mux._handle_update_once(update(2, 10, text="second message"), 2)
-    lane = lanes[LaneKey(123, 10)]
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline and len(lane._session.injected) < 2:
-        time.sleep(.01)
-    lane._inbound_queue.join()
-    assert lane._session.injected == ["first message", "second message"]
-
-
 def test_existing_parked_topic_message_is_injected_unchanged_after_restart(tmp_path):
     from agent2telegramtopic.state import Lane, LaneStore
 
@@ -950,7 +930,7 @@ def test_slot_manager_never_starts_a_fifth_live_lane_and_delivers_it_later(tmp_p
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline and not fifth._session.injected:
         time.sleep(.01)
-    assert fifth._session.injected[0] == "fifth topic"
+    assert fifth._session.injected[0].startswith("fifth topic\n\n(New topic:")
     assert transcript_written.wait(2)
     # Model the agent's turn-end hook arriving in a later step, after inject has
     # closed the transcript file and its complete answer is visible to the reader.

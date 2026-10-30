@@ -149,7 +149,7 @@ def test_write_hooks_settings_registers_lane_scoped_stop_and_session_start(tmp_p
     path = tmp_path / "bot.hooks.json"
     write_hooks_settings(path, "/path/python with spaces", "test-bot")
     settings = json.loads(path.read_text())
-    assert list(settings) == ["hooks"]
+    assert list(settings) == ["hooks", "statusLine"]
     assert set(settings["hooks"]) == {"Stop", "SessionStart"}
     repo_root = Path(agent2telegramtopic.__file__).resolve().parent.parent
     expected = {"hooks": [{"type": "command", "command": f"PYTHONPATH={repo_root} '/path/python with spaces' -m agent2telegramtopic.hook --bot test-bot"}]}

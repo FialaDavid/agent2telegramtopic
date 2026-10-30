@@ -80,7 +80,7 @@ def test_startup_registers_all_supported_topic_commands(monkeypatch, tmp_path):
 
     assert app_module.main([]) == 0
     assert [item["command"] for item in registered] == [
-        "start", "help", "status", "new", "setkey", "voice", "id", "close"]
+        "start", "help", "status", "usage", "new", "setkey", "voice", "id", "close"]
     assert all(item.get("description") for item in registered)
 
 
@@ -197,7 +197,7 @@ def test_new_in_one_lane_only_sends_and_notifies_in_that_lane(tmp_path):
 def test_help_and_id_are_consumed_and_topic_targeted(tmp_path):
     lane, tg = make_lane(tmp_path)
     assert lane._handle_command("/help", 44)
-    assert "/status" in tg.messages[-1][1] and "/usage" not in tg.messages[-1][1]
+    assert "/status" in tg.messages[-1][1] and "/usage" in tg.messages[-1][1]
     assert tg.messages[-1][2] == {"chat_id": 44, "message_thread_id": 12}
     assert lane._handle_command("/id", 44)
     assert "44" in tg.messages[-1][1]
@@ -322,15 +322,15 @@ def assert_reply_to_lane(tg, lane):
         assert params["message_thread_id"] == lane.key.thread_id
 
 
-def test_menu_help_and_dispatcher_include_new_but_not_usage_or_team(cmd_lane):
+def test_menu_help_and_dispatcher_include_new_and_usage_but_not_team(cmd_lane):
     lane, tg = cmd_lane
     commands = {item["command"] for item in BOT_COMMANDS}
     assert {"new", "close"} <= commands
-    assert "usage" not in commands
+    assert "usage" in commands
     assert "team" not in commands
     lane._status_text = lambda agent: "status"
     assert lane._handle_command("/help", 7)
-    assert "/usage" not in tg.messages[0][1]
+    assert "/usage" in tg.messages[0][1]
     assert "/new" in tg.messages[0][1]
     assert_reply_to_lane(tg, lane)
     assert lane._handle_command("/new", 7)

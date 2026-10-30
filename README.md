@@ -28,6 +28,19 @@ library.
   and it answers with a one-liner.
 - **Voice (optional, ElevenLabs).** Voice notes are transcribed with ElevenLabs Scribe;
   `/voice` switches replies to spoken voice notes (ElevenLabs text-to-speech, needs `ffmpeg`).
+- **Topic naming.** The first message of a newly created topic carries a note asking the agent to
+  name the topic after its subject and give it an icon. The agent does it with
+  `python3 -m agent2telegramtopic topic-edit "<name>" "<emoji>"` (run from the topic's session; it
+  reads the bot token from `config.json`, uses the topic of the working directory, and exits
+  non-zero listing the allowed icons when the emoji is not one). Opening a conversation again with
+  `/new` never triggers it. `setup` installs a small `telegram-topic` skill for the chosen agent
+  (`~/.claude/skills/` or `~/.codex/skills/`; an existing different file is left alone and
+  `uninstall` removes only an unchanged copy).
+- **Usage limits.** `/usage` shows the agent's rate-limit windows without any credentials. Claude
+  Code: the bridge passes a `statusLine` command that records the `rate_limits` Claude Code reports
+  after each reply; **this replaces your own statusline in sessions started by the bridge** (your
+  other Claude Code sessions are untouched). Codex: read from the `token_count` events in its
+  rollout log. Data appears after the agent's first reply and is marked stale after an hour.
 - **Progress.** A live status bubble shows what the agent is doing while it works.
 
 ### Commands
@@ -37,6 +50,7 @@ library.
 | *(any text)* | sent straight to the topic's agent session |
 | `/start`, `/help` | short intro |
 | `/status` | session, queue and voice status of this topic |
+| `/usage` | rate-limit usage of the agent (5-hour / 7-day windows, when they reset) |
 | `/new` | start a fresh conversation in this topic (`/clear` for Claude Code, `/new` for Codex) |
 | `/setkey <key>` | store your ElevenLabs key (your message is deleted right after) |
 | `/voice` | toggle spoken replies for this topic |
