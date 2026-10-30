@@ -930,7 +930,7 @@ def test_slot_manager_never_starts_a_fifth_live_lane_and_delivers_it_later(tmp_p
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline and not fifth._session.injected:
         time.sleep(.01)
-    assert fifth._session.injected[0].startswith("fifth topic\n\n(New topic:")
+    assert fifth._session.injected[0] == "fifth topic"  # no creation event: not a new topic
     assert transcript_written.wait(2)
     # Model the agent's turn-end hook arriving in a later step, after inject has
     # closed the transcript file and its complete answer is visible to the reader.

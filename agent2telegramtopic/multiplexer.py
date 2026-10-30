@@ -522,6 +522,14 @@ class Multiplexer:
                 return next_offset
         else:
             routed = routing.route_update(upd)
+            event = routing.topic_event(upd)
+            if event is not None and event[1] == "created" and self.lane_store is not None:
+                # The user just created this topic; its first message gets the naming hint. A topic's
+                # thread id is the id of its creation service message if that carries no thread id.
+                m = upd["message"]
+                thread_id = m.get("message_thread_id", m.get("message_id"))
+                if type(thread_id) is int and thread_id != routing.GENERAL_THREAD_ID:
+                    self.lane_store.mark_new_topic(routing.LaneKey(event[0].chat_id, thread_id))
         if routed is None:
             # Delta (9.3): allowed but unroutable updates are consumed without creating a lane.
             self.log.info("ignoring allowed Telegram update without a supported content route: update_id=%s %s",
@@ -537,14 +545,7 @@ class Multiplexer:
         # Delta (a): route to the selected LaneBridge's LaneKey-scoped durable inbox.
         try:
             with self._lane_lock:
-                # A topic with no stored lane row has just been created; /new and /clear in an
-                # existing topic keep their row, so they never trigger the naming hint.
-                is_new_topic = (self.lane_store is not None
-                                and key.thread_id != routing.GENERAL_THREAD_ID
-                                and self.lane_store.get(key) is None)
                 lane = self._lane(key)
-                if is_new_topic:
-                    lane._name_topic_pending = True
         except Exception:
             self.log.exception("could not start lane %s; not advancing the offset", key)
             return offset

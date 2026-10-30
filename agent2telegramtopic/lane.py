@@ -615,15 +615,15 @@ class LaneBridge:
         text = self._limit_inbound_prompt(text, self.key.chat_id)
         if not text:
             return True
-        # Only the multiplexer sets this, for a topic it has just seen created (never after /new).
-        name_topic_pending = getattr(self, "_name_topic_pending", False)
+        # Only a topic whose creation Telegram announced is pending naming (never after /new).
+        name_topic_pending = self._lane_store is not None and self._lane_store.is_new_topic(self.key)
         if name_topic_pending:
             text += NEW_TOPIC_HINT.format(command=cli_command(sys.executable))
         try:
             self._begin_turn()
             delivered = self._inject(text)
             if delivered and name_topic_pending:
-                self._name_topic_pending = False
+                self._lane_store.clear_new_topic(self.key)
             if not delivered:
                 self._turn_active.clear()
                 if self._lane_store is not None:

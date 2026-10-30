@@ -22,6 +22,14 @@ def run_mux(tmp_path, texts_by_thread):
     store = LaneStore(tmp_path / "lanes.db")
     mux, _ = make_mux(tmp_path, client, lanes)
     mux.lane_store, mux.max_live = store, 4
+    build = mux.lane_factory
+
+    def factory(key):  # production (app.py) hands every lane the store
+        lane = build(key)
+        lane._lane_store = store
+        return lane
+
+    mux.lane_factory = factory
     mux._start_slot_manager()
     return mux, lanes, store
 
@@ -34,39 +42,71 @@ def injected(lane, count):
     return lane._session.injected
 
 
-def test_new_topic_first_message_gets_the_naming_hint_and_later_ones_do_not(tmp_path):
+def created(uid, thread, *, via_thread_field=True):
+    """The service update Telegram delivers when the user creates a topic."""
+    msg = {"chat": {"id": 123, "type": "private"}, "message_id": thread, "from": {"id": 8},
+           "forum_topic_created": {"name": "New topic"}}
+    if via_thread_field:
+        msg["message_thread_id"] = thread
+    return {"update_id": uid, "message": msg}
+
+
+def test_first_message_after_topic_creation_gets_the_naming_hint_and_later_ones_do_not(tmp_path):
     mux, lanes, _ = run_mux(tmp_path, None)
-    mux._handle_update_once(update(1, 10, text="first message"), 0)
-    mux._handle_update_once(update(2, 10, text="second message"), 2)
+    mux._handle_update_once(created(1, 10), 0)
+    assert LaneKey(123, 10) not in lanes  # the service message is not content: no turn, no lane
+    mux._handle_update_once(update(2, 10, text="first message"), 2)
+    mux._handle_update_once(update(3, 10, text="second message"), 3)
     texts = injected(lanes[LaneKey(123, 10)], 2)
     assert texts[0].startswith("first message") and HINT in texts[0]
     assert "topic-edit" in texts[0]
     assert texts[1] == "second message"
 
 
-def test_new_in_an_existing_topic_does_not_trigger_the_naming_hint(tmp_path):
+def test_creation_without_thread_field_still_names_the_topic_by_its_service_message_id(tmp_path):
+    mux, lanes, _ = run_mux(tmp_path, None)
+    mux._handle_update_once(created(1, 10, via_thread_field=False), 0)
+    mux._handle_update_once(update(2, 10, text="first message"), 2)
+    assert HINT in injected(lanes[LaneKey(123, 10)], 1)[0]
+
+
+def test_creation_survives_a_bridge_restart_before_the_first_message(tmp_path):
+    mux, _, _ = run_mux(tmp_path, None)
+    mux._handle_update_once(created(1, 10), 0)
+    mux2, lanes2, _ = run_mux(tmp_path, None)  # a new process opens the same lane database
+    mux2.lane_store = LaneStore(tmp_path / "lanes.db")
+    mux2._handle_update_once(update(2, 10, text="first message"), 2)
+    assert HINT in injected(lanes2[LaneKey(123, 10)], 1)[0]
+
+
+def test_message_in_preexisting_topic_without_creation_event_gets_no_hint(tmp_path):
+    """After a fresh install every old topic has no lane row; that is not a new topic."""
+    mux, lanes, _ = run_mux(tmp_path, None)
+    mux._handle_update_once(update(1, 10, text="old topic message"), 0)
+    assert injected(lanes[LaneKey(123, 10)], 1) == ["old topic message"]
+
+
+def test_new_in_a_created_topic_does_not_trigger_the_naming_hint_again(tmp_path):
     """Regression 2026-10-30: an emptied session after /new is not a new topic."""
     mux, lanes, store = run_mux(tmp_path, None)
-    mux._handle_update_once(update(1, 10, text="first message"), 0)
+    mux._handle_update_once(created(1, 10), 0)
+    mux._handle_update_once(update(2, 10, text="first message"), 1)
     lane = lanes[LaneKey(123, 10)]
     assert HINT in injected(lane, 1)[0]
     lane._turn_active.clear()  # the first turn has finished
     store.set_busy(LaneKey(123, 10), False)
     lane._session.send_command = lambda text: None
-    mux._handle_update_once(update(2, 10, text="/new"), 2)
-    mux._handle_update_once(update(3, 10, text="after the reset"), 3)
+    mux._handle_update_once(update(3, 10, text="/new"), 3)
+    mux._handle_update_once(update(4, 10, text="after the reset"), 4)
     texts = injected(lane, 2)
     assert texts[1] == "after the reset"
     assert all(HINT not in t for t in texts[1:])
 
 
-def test_known_parked_topic_and_general_topic_get_no_hint(tmp_path):
-    from agent2telegramtopic.state import Lane
-    mux, lanes, store = run_mux(tmp_path, None)
-    store.upsert(Lane(123, 10, "parked topic", "claude-code", "", "parked", False, time.time(), None, 0))
-    mux._handle_update_once(update(1, 10, text="resume"), 0)
+def test_general_topic_gets_no_hint_even_with_a_creation_event(tmp_path):
+    mux, lanes, _ = run_mux(tmp_path, None)
+    mux._handle_update_once(created(1, 1), 0)
     mux._handle_update_once(update(2, 1, text="general"), 2)
-    assert injected(lanes[LaneKey(123, 10)], 1) == ["resume"]
     assert injected(lanes[LaneKey(123, 1)], 1) == ["general"]
 
 

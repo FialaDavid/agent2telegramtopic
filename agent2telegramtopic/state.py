@@ -96,6 +96,15 @@ class LaneStore:
                     PRIMARY KEY (chat_id, message_id)
                 )"""
             )
+            # Topics whose creation Telegram announced and whose first message has not yet
+            # been delivered to the agent with the naming hint.
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS new_topics (
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER NOT NULL,
+                    PRIMARY KEY (chat_id, thread_id)
+                )"""
+            )
 
     @staticmethod
     def _lane(row: tuple) -> Lane:
@@ -198,3 +207,18 @@ class LaneStore:
             row = db.execute("SELECT thread_id FROM message_threads "
                              "WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)).fetchone()
         return row[0] if row is not None else None
+
+    def mark_new_topic(self, key: LaneKey) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("INSERT OR IGNORE INTO new_topics (chat_id, thread_id) VALUES (?, ?)",
+                       (key.chat_id, key.thread_id))
+
+    def is_new_topic(self, key: LaneKey) -> bool:
+        with self._lock, self._connect() as db:
+            return db.execute("SELECT 1 FROM new_topics WHERE chat_id = ? AND thread_id = ?",
+                              (key.chat_id, key.thread_id)).fetchone() is not None
+
+    def clear_new_topic(self, key: LaneKey) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("DELETE FROM new_topics WHERE chat_id = ? AND thread_id = ?",
+                       (key.chat_id, key.thread_id))
