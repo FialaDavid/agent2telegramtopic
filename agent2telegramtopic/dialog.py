@@ -15,6 +15,7 @@ _MARKER_CHARS = "❯›"
 _NUMBERED_RE = re.compile(r"^(\s*)([❯›]\s*)?(\d+)[.)]\s+(\S.*?)\s*$")
 _MARKED_RE = re.compile(r"^(\s*[❯›]\s*)\S")
 _HINT_RE = re.compile(r"(·.*\b(esc|enter)\b)|(^\s*press (enter|esc))", re.IGNORECASE)
+_ARROW_RE = re.compile("[←→↑↓]")  # terminal key hints; arrow keys do nothing in Telegram
 _DECOR_RE = re.compile(r"[‹›]")
 FALLBACK_TAIL_LINES = 20
 MAX_BODY_CHARS = 3000
@@ -102,7 +103,7 @@ def parse(pane: str) -> Dialog:
         skip |= {i for i, ln in enumerate(lines) if _HINT_RE.search(ln)}
     body: list[str] = []
     for i, ln in enumerate(lines):
-        if i in skip:
+        if i in skip or _ARROW_RE.search(ln):
             continue
         text = ln.strip()
         if text or (body and body[-1]):

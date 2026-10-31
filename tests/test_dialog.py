@@ -75,3 +75,41 @@ def test_identity_ignores_the_moving_highlight_but_not_the_text():
     assert dialog.parse(moved).digest == dialog.parse(NUDGE).digest
     assert dialog.parse(moved).highlighted == 1
     assert dialog.parse(NUDGE.replace("400k", "500k")).digest != dialog.parse(NUDGE).digest
+
+
+MODEL_PICKER = f"""\
+{RULE}
+ Select model
+ Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names, specify with --model.
+
+     1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+     3.  Sonnet 5.5             Most efficient for simpler tasks
+     4.  Fable 5.1              For your toughest challenges
+     5.  Haiku 5.5              Fastest for quick answers
+     6.  Haiku 4.5              Fastest for quick answers
+     7.  Sonnet 5               Efficient for routine tasks
+     8.  Opus 5                 Best for everyday, complex tasks
+     9.  Fable 5                Most capable for your hardest and longest-running tasks
+   ↓ 10. Opus 4.8               Best for everyday, complex tasks
+      … +3 models
+
+   ◐ Medium effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+"""
+
+
+def test_model_picker_body_has_no_arrow_key_hints_and_keeps_the_numbered_models():
+    dlg = dialog.parse(MODEL_PICKER)
+    assert not any(a in dlg.body for a in "←→↑↓")
+    assert "Select model" in dlg.body
+    assert len(dlg.options) == 9
+    assert [o.key for o in dlg.options] == [str(n) for n in range(1, 10)]
+    assert dlg.highlighted == 1
+
+
+def test_compact_dialog_body_has_no_arrow_key_hints():
+    assert not any(a in dialog.parse(NUDGE).body for a in "←→↑↓")
