@@ -547,3 +547,37 @@ def test_main_logs_one_startup_line_naming_bot_agent_config_and_lane_root(monkey
                  str((tmp_path / "lanes").resolve())):
         assert part in lines[0]
     assert FAKE_TOKEN not in caplog.text
+
+
+def _run_main_with_username(monkeypatch, tmp_path, username):
+    class FakeClient:
+        def get_me(self):
+            return {"has_topics_enabled": True, "username": username}
+
+        def set_my_commands(self, commands):
+            del commands
+
+    class FakeApp:
+        client = FakeClient()
+        ran = False
+
+        def run_forever(self):
+            self.ran = True
+    fake = FakeApp()
+    monkeypatch.setattr(app_module.Path, "home", classmethod(lambda cls: tmp_path))
+    write_config(tmp_path)
+    monkeypatch.setattr(app_module, "build_app", lambda config, token, cwd: fake)
+    return app_module.main([]), fake
+
+
+def test_main_warns_but_still_starts_when_bot_username_differs_from_telegram(monkeypatch, tmp_path, caplog):
+    code, fake = _run_main_with_username(monkeypatch, tmp_path, "OtherBot")
+    assert code == 0 and fake.ran
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "ExampleBot" in warnings[0] and "OtherBot" in warnings[0]
+
+
+def test_main_does_not_warn_when_bot_username_matches_ignoring_case(monkeypatch, tmp_path, caplog):
+    code, fake = _run_main_with_username(monkeypatch, tmp_path, "examplebot")
+    assert code == 0 and fake.ran
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

@@ -248,6 +248,11 @@ def main(argv=None) -> int:
                 log.warning("Bot topics are not enabled (Threaded Mode); starting anyway, "
                             "the first message will tell the user how to turn them on")
                 app.topics_enabled = False
+            real = me.get("username")
+            if real and real.lower() != config.bot_name.lower():
+                log.warning("config bot_username %r differs from the Telegram bot @%s; "
+                            "the service name and state directory follow the config value",
+                            config.bot_name, real)
             log.info("started @%s (agent %s, config %s, lanes under %s)",
                      config.bot_name, config.agent_kind, config_file(), root)
             app.run_forever()
