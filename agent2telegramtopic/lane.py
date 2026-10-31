@@ -1073,6 +1073,9 @@ class LaneBridge:
             return True
 
     def _show_dialog(self, pane: str) -> None:
+        self._show_dialog_with_kind(pane, proactive=False)
+
+    def _show_dialog_with_kind(self, pane: str, *, proactive: bool) -> None:
         dlg = dialog.parse(pane)
         current = self._dialog
         if current is not None:
@@ -1082,6 +1085,7 @@ class LaneBridge:
             self._dialog_bubble = None
         who = "Claude Code" if (self.agent or "claude-code") == "claude-code" else "Agent"
         text = "\n\n".join(p for p in (f"⚠️ {who} čeká na tvou volbu", dlg.body,
+                                        "Agent čeká, dokud nevybereš." if proactive else
                                         "Tvoje zpráva počká, až dialog zavřeš.") if p)
         tokens, rows = {}, []
         for index, option in enumerate(dlg.options):
@@ -1110,22 +1114,51 @@ class LaneBridge:
             self.tg.edit_clear_keyboard(self.key.chat_id, bubble.message_id, note)
 
     def _dialog_tick(self) -> None:
-        """While a bubble is open, look at the pane about every DIALOG_POLL seconds."""
+        """Recheck an open bubble or proactively notice a stable interactive dialog."""
         with self._dialog_lock():
             bubble = self._dialog
-            if bubble is None or time.monotonic() - bubble.checked < DIALOG_POLL:
+            now = time.monotonic()
+            if bubble is not None and now - bubble.checked < DIALOG_POLL:
                 return
-            bubble.checked = time.monotonic()
+            last_check = getattr(self, "_dialog_last_check", 0.0)
+            if bubble is None and now - last_check < DIALOG_POLL:
+                return
+            self._dialog_last_check = now
+            if bubble is not None:
+                bubble.checked = now
+            if getattr(self, "_defer_inbound_replay", False):
+                return
+            alive = getattr(self._session, "alive", True)
+            try:
+                alive = alive() if callable(alive) else alive
+            except Exception:
+                alive = False
+            if not alive:
+                self._dialog_proactive_seen = None
+                return
             try:
                 pane, focused = self._session.dialog_snapshot()
             except Exception as e:
                 log.warning("dialog re-check failed: %s", type(e).__name__)
                 return
             if focused:
-                self._close_dialog(DIALOG_CLOSED)
-                self._replay_pending_inbound()
+                self._dialog_proactive_seen = None
+                if bubble is not None:
+                    self._close_dialog(DIALOG_CLOSED)
+                    self._replay_pending_inbound()
             else:
-                self._show_dialog(pane)
+                parsed = dialog.parse(pane)
+                if bubble is not None:
+                    self._show_dialog(pane)
+                    return
+                if not parsed.options:
+                    self._dialog_proactive_seen = None
+                    return
+                seen = getattr(self, "_dialog_proactive_seen", None)
+                if seen is None or seen[0] != parsed.digest:
+                    self._dialog_proactive_seen = (parsed.digest, now)
+                elif now - seen[1] >= 10.0:
+                    self._show_dialog_with_kind(pane, proactive=True)
 
     def _refresh_after_key(self) -> None:
         """After a click: deliver the parked messages, or show whatever dialog came next."""

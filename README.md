@@ -51,7 +51,8 @@ the dialog's text and a button per option read from the screen, plus `Zrušit (E
 stays queued (it is not dropped or counted as a failed delivery) and is delivered as soon as the
 dialog is gone, whether you tapped a button or closed it in the terminal. A tap sends only that
 choice's keys, after re-checking that the same dialog is still on screen; the bridge never picks an
-option by itself and never looks for dialogs except when a message is blocked.
+option by itself. A recognised dialog that stays open is also reported after 10 seconds, even
+when no message is waiting; streaming and unrecognised screens are ignored.
 
 ### Commands
 
