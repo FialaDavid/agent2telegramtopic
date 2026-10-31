@@ -3,6 +3,7 @@
 
 import argparse
 from dataclasses import replace
+from datetime import datetime, timezone
 import logging
 import json
 import os
@@ -11,7 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from agent2telegramtopic import redaction
+from agent2telegramtopic import archive, redaction
+from agent2telegramtopic import lane as lane_module
 from agent2telegramtopic.config import (CONFIG_ENV, Config, app_dir, bot_token, build_config, config_file, hooks_settings_file,
                                  is_default_instance, lane_path, lane_state_file, load_config,
                                  lanes_root, state_db_path, status_file, write_hooks_settings)
@@ -161,8 +163,25 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 while bridge._turn_active.is_set() and not mux._stop.wait(0.1):
                     continue
                 session_obj = bridge._session
+
+                def session_alive():
+                    alive = getattr(session_obj, "alive", False)
+                    return bool(alive() if callable(alive) else alive)
+
+                summary, summary_error = None, None
+                if session_obj is not None and session_alive():
+                    # Never block closing on the summary: any failure archives it as null.
+                    event = bridge.summarize_internal()
+                    if event is None:
+                        summary_error = "the agent was busy"
+                    elif not event.wait(lane_module.INTERNAL_COMMAND_TIMEOUT + 30) or bridge._internal_timed_out:
+                        summary_error = "the summary turn timed out"
+                    elif not bridge._summary_text:
+                        summary_error = "the agent returned no summary"
+                    else:
+                        summary = bridge._summary_text
                 if session_obj is not None:
-                    if lane_store.get(key).ctx_tokens >= config.compact_min_tokens:
+                    if session_alive() and lane_store.get(key).ctx_tokens >= config.compact_min_tokens:
                         event = bridge.compact_internal()
                         if event is None:
                             bridge._closing = False
@@ -174,24 +193,40 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                         session_obj.close()
                     except Exception:
                         log.exception("could not close lane %s", key)
-                    alive = getattr(session_obj, "alive", False)
-                    alive = alive() if callable(alive) else alive
-                    if alive:
+                    if session_alive():
                         bridge._closing = False
                         lane_store.set_status(key, "live")
                         lane_store.set_busy(key, False)
                         bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
                         return
                 try:
-                    inbox = bridge._ensure_inbox()
-                    pending = inbox is not None and bool(inbox.pending())
+                    lane_row = lane_store.get(key)
+                    transcript_path = bridge._transcript if bridge._transcript and bridge._transcript.exists() else None
+                    archive.write_archive(state_dir / "archive", {
+                        "bot": config.bot_name, "chat": key.chat_id, "thread": key.thread_id,
+                        "title": lane_store.topic_titles().get(key),
+                        "agent": config.agent_kind,
+                        "session_id": bridge.session_id or lane_row.session_id,
+                        "created_at": archive.transcript_created_at(transcript_path),
+                        "closed_at": archive.iso_utc(datetime.now(timezone.utc)),
+                        "transcript": str(transcript_path.resolve()) if transcript_path else None,
+                        "summary": summary, "summary_error": summary_error,
+                    })
                 except Exception:
-                    pending = False
-                lane_store.set_status(key, "waiting" if pending else "parked")
+                    log.exception("could not write the archive record for %s", key)
+                    lane_store.set_status(key, "parked")
+                    lane_store.set_busy(key, False)
+                    mux._retire_parked_lane(key, bridge)
+                    bridge.stop()
+                    bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                    return
+                lane_store.set_status(key, "archived")
                 lane_store.set_busy(key, False)
                 mux._retire_parked_lane(key, bridge)
                 bridge.stop()
                 mux._slot_wakeup.set()
+                bridge.tg.send_message(
+                    key.chat_id, "🗄️ Archived. You can delete this topic; writing here again resumes the session.")
             threading.Thread(target=park_after_command, daemon=True).start()
         bridge._on_close = close_lane
         bridge_ref["bridge"] = bridge

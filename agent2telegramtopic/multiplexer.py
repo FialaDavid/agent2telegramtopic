@@ -633,7 +633,7 @@ class Multiplexer:
                 pass
             elif self.lane_store is not None and internal:
                 pass
-            elif self.lane_store is not None and status in {"parked", "waiting"}:
+            elif self.lane_store is not None and status in {"parked", "waiting", "archived"}:
                 # Keep the status transition atomic with the post-reserve decision.
                 self.lane_store.set_status(key, "waiting")
                 self.lane_store.set_busy(key, False)

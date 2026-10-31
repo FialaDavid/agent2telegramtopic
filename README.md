@@ -67,7 +67,7 @@ when no message is waiting; streaming and unrecognised screens are ignored.
 | `/setkey <key>` | store your ElevenLabs key (your message is deleted right after) |
 | `/voice` | toggle spoken replies for this topic |
 | `/id` | show your Telegram id |
-| `/close` | park this topic's session (it resumes when you write again) |
+| `/close` | Archive this topic (summary saved; writing again resumes) |
 
 Other `/commands` are passed through to the agent.
 

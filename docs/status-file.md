@@ -43,6 +43,14 @@ Rules:
 
 - Timestamps are integer unix seconds. Unknown values are `null`; keys are never omitted.
 - `status` is `live`, `parked`, or `waiting` (parked with inbound messages waiting for a slot).
+- Archived lanes (closed with `/close`) are not in `lanes`: their DB status is `archived` and the
+  lane disappears from the file. `/close` writes a record into `<instance dir>/state/<Bot>/archive/`
+  (next to `outbox/` and `lanes/`): `index.jsonl`, one JSON object per line, appended atomically,
+  keys `bot, chat, thread, title, agent, session_id, created_at, closed_at, transcript, summary,
+  summary_error` (times ISO 8601 UTC; `summary` is the agent's own short summary, `null` with
+  `summary_error` set when it could not be made; `transcript` is the absolute transcript path or
+  `null`), plus `<YYYY-MM-DD>-<chat>-<thread>.md` (date = `closed_at`), a readable copy that a
+  re-close appends to. Writing in an archived topic resumes the same session and the lane returns.
 - `alive`: the lane's tmux session exists on the instance's tmux server at write time.
 - `title`: the name from `topic_titles`, recorded from topic service messages or immediately after a
   successful bridge or topic skill rename; else `null`.

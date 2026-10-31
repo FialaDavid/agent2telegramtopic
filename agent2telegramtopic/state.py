@@ -9,7 +9,7 @@ from typing import Literal
 from agent2telegramtopic.routing import LaneKey
 
 
-LaneStatus = Literal["live", "parked", "waiting"]
+LaneStatus = Literal["live", "parked", "waiting", "archived"]
 
 
 @dataclass
@@ -57,7 +57,7 @@ class LaneStore:
                     name TEXT NOT NULL,
                     agent TEXT NOT NULL,
                     session_id TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('live', 'parked', 'waiting')),
+                    status TEXT NOT NULL CHECK (status IN ('live', 'parked', 'waiting', 'archived')),
                     busy INTEGER NOT NULL,
                     last_activity REAL NOT NULL,
                     last_compact REAL,
@@ -68,7 +68,7 @@ class LaneStore:
             schema = db.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='lanes'"
             ).fetchone()[0]
-            if "waiting" not in schema:
+            if "archived" not in schema:
                 # SQLite cannot alter a CHECK constraint. Rebuild the table,
                 # preserving every lane and its primary key.
                 db.execute("ALTER TABLE lanes RENAME TO lanes_old")
@@ -79,7 +79,7 @@ class LaneStore:
                         name TEXT NOT NULL,
                         agent TEXT NOT NULL,
                         session_id TEXT NOT NULL,
-                        status TEXT NOT NULL CHECK (status IN ('live', 'parked', 'waiting')),
+                        status TEXT NOT NULL CHECK (status IN ('live', 'parked', 'waiting', 'archived')),
                         busy INTEGER NOT NULL,
                         last_activity REAL NOT NULL,
                         last_compact REAL,
@@ -172,17 +172,20 @@ class LaneStore:
         return [self._lane(row) for row in rows]
 
     def list_all(self) -> list[Lane]:
+        """Every lane except archived ones (they are closed and no longer shown or counted)."""
         with self._lock, self._connect() as db:
             rows = db.execute(
                 "SELECT chat_id, thread_id, name, agent, session_id, status, busy, "
-                "last_activity, last_compact, ctx_tokens FROM lanes ORDER BY chat_id, thread_id"
+                "last_activity, last_compact, ctx_tokens FROM lanes WHERE status != 'archived' "
+                "ORDER BY chat_id, thread_id"
             ).fetchall()
         return [self._lane(row) for row in rows]
 
     def reconcile(self, live_keys: set[LaneKey]) -> None:
         """Clear stale busy flags and align persisted status with tmux reality."""
         with self._lock, self._connect() as db:
-            rows = db.execute("SELECT chat_id, thread_id FROM lanes").fetchall()
+            rows = db.execute("SELECT chat_id, thread_id FROM lanes "
+                              "WHERE status != 'archived'").fetchall()
             for chat_id, thread_id in rows:
                 key = LaneKey(chat_id, thread_id)
                 db.execute("UPDATE lanes SET status = ?, busy = 0 WHERE chat_id = ? AND thread_id = ?",

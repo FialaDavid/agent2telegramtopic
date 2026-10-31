@@ -49,7 +49,7 @@ BOT_COMMANDS = [
     {"command": "setkey", "description": "Enable voice (your ElevenLabs API key)"},
     {"command": "voice", "description": "Toggle spoken (voice-note) replies"},
     {"command": "id", "description": "Show your Telegram id"},
-    {"command": "close", "description": "Park this topic's session"},
+    {"command": "close", "description": "Archive this topic (summary saved; writing again resumes)"},
 ]
 
 NEW_TOPIC_HINT = (
@@ -75,6 +75,10 @@ OUTBOX_MAX_ATTEMPTS = 3
 IDLE_DONE = 90.0
 IDLE_DONE_HOOKED = 600.0
 INTERNAL_COMMAND_TIMEOUT = 300.0
+CLOSE_SUMMARY_PROMPT = (
+    "This topic is being closed and archived. Reply with a short plain-text summary, max 12 "
+    "lines, in the language of the conversation: what it was about, the outcome, and any open "
+    "points. Do not use tools.")
 SUSPICIOUS_TURN_SECONDS = 3.0
 # Ported from agent2telegram attach.py (MIT).
 INJECT_ATTEMPTS = 3
@@ -345,6 +349,9 @@ class LaneBridge:
         self._heartbeat = self._signal.parent / f"outbound_heartbeat_{key.thread_id}"
         self._pending_turn_end = False
         self._internal_turn = False
+        # "compact" or "summary": which private turn _internal_turn stands for.
+        self._internal_kind = "compact"
+        self._summary_text = ""
         self._internal_turn_done = threading.Event()
         self._internal_lock = threading.RLock()
         self._internal_deadline = None
@@ -919,6 +926,13 @@ class LaneBridge:
     # Delta (10.2): lifecycle compaction is not a Telegram-originated turn.
     def compact_internal(self) -> threading.Event | None:
         """Submit /compact and return its agent-specific completion event."""
+        return self._begin_internal_turn("compact", "/compact")
+
+    def summarize_internal(self) -> threading.Event | None:
+        """Submit the closing-summary prompt as a private turn; the answer lands in _summary_text."""
+        return self._begin_internal_turn("summary", CLOSE_SUMMARY_PROMPT)
+
+    def _begin_internal_turn(self, kind: str, command: str) -> threading.Event | None:
         with self._internal_lock:
             if self._turn_active.is_set():
                 return None
@@ -930,6 +944,8 @@ class LaneBridge:
             self._compact_ctx_before = self._internal_context_tokens()
             self._internal_turn_id = None
             self._internal_compacted_turn_id = None
+            self._internal_kind = kind
+            self._summary_text = ""
             if self._compact_done:
                 try:
                     self._compact_done.unlink()
@@ -948,14 +964,14 @@ class LaneBridge:
         threading.Thread(target=self._internal_timeout_loop, args=(done,), daemon=True).start()
         # TmuxSession.send_command waits for the TUI to submit. Keep the watcher tick
         # nonblocking and let the independent timeout cover a stalled submission.
-        threading.Thread(target=self._submit_internal_compact, args=(done,), daemon=True).start()
+        threading.Thread(target=self._submit_internal_command, args=(command,), daemon=True).start()
         return done
 
-    def _submit_internal_compact(self, done: threading.Event) -> None:
+    def _submit_internal_command(self, command: str) -> None:
         try:
-            self._session.send_command("/compact")
+            self._session.send_command(command)
         except Exception as exc:
-            log.warning("internal /compact command failed: %s", type(exc).__name__)
+            log.warning("internal command failed: %s", type(exc).__name__)
             # Submission may fail after Enter; hold inbound until completion or timeout.
 
     def _internal_timeout_loop(self, done: threading.Event) -> None:
@@ -1418,7 +1434,7 @@ class LaneBridge:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if self._internal_turn and self.agent == "codex":
+                if self._internal_turn and self._internal_kind == "compact" and self.agent == "codex":
                     payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
                     # Codex's rollout compacted record has no turn_id. Its task_started
                     # event immediately preceding it identifies the internal turn.
@@ -1446,7 +1462,8 @@ class LaneBridge:
         finally:
             self._rec_live = False
         self._tpos += nl + 1
-        if self._internal_turn and self.agent == "claude-code" and self._compact_done.exists():
+        if (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "compact"
+                and self._compact_done.exists()):
             self._finish_turn()
         if self._turn_from_tg:
             self._last_activity = time.monotonic()
@@ -1470,6 +1487,8 @@ class LaneBridge:
             return
         # Delta (10.2): lifecycle output, including errors, is private to the lane.
         if self._internal_turn:
+            if self._internal_kind == "summary" and ev.kind == "text" and ev.text.strip():
+                self._summary_text = ev.text.strip()
             return
         if self._owner_chat is None:
             return
@@ -1660,7 +1679,8 @@ class LaneBridge:
                 if tokens is not None:
                     self._lane_store.set_ctx_tokens(self.key, tokens)
         if internal:
-            self._record_internal_compaction()
+            if self._internal_kind == "compact":
+                self._record_internal_compaction()
             # Delta (10.10): discard the entire internal-command tail, including a Codex
             # task_complete that follows its compacted record, before queued prompts resume.
             if self._transcript and self._transcript.exists():
@@ -2095,8 +2115,12 @@ class LaneBridge:
                 self._consume_signal_text()
             else:
                 self._drain_signal()
-            if self._internal_turn and self.agent == "claude-code" and self._compact_done.exists():
+            if (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "compact"
+                    and self._compact_done.exists()):
                 self._finish_turn()
+            elif (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "summary"
+                    and self._turn_end is not None and self._turn_end.exists()):
+                self._end_turn()
             elif self._pending_turn_end:
                 if self._turn_begun_at and time.monotonic() - self._turn_begun_at < SUSPICIOUS_TURN_SECONDS:
                     log.warning("turn ending after %.1fs — too fast for real work; either a "
