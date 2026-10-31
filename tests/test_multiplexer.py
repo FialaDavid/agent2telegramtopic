@@ -1424,7 +1424,7 @@ def test_allowed_updates_covers_messages_edits_and_reactions(tmp_path):
     mux, _ = make_mux(tmp_path, client)
     client.on_last_poll = mux.stop
     mux._inbound_loop()
-    assert json.loads(client.allowed_updates[0]) == ["message", "edited_message", "message_reaction"]
+    assert json.loads(client.allowed_updates[0]) == ["message", "edited_message", "message_reaction", "callback_query"]
 
 
 def test_polling_uses_telegram_api_result_and_json_array_allowed_updates(tmp_path):
@@ -1459,7 +1459,7 @@ def test_polling_uses_telegram_api_result_and_json_array_allowed_updates(tmp_pat
     key = LaneKey(123, 10)
     lanes[key]._inbound_queue.join()
     assert lanes[key]._session.injected == ["from Telegram"]
-    assert json.loads(calls[0][1]["allowed_updates"]) == ["message", "edited_message", "message_reaction"]
+    assert json.loads(calls[0][1]["allowed_updates"]) == ["message", "edited_message", "message_reaction", "callback_query"]
 
 
 def test_exhausted_poll_network_retries_use_outage_backoff(tmp_path, caplog, monkeypatch):

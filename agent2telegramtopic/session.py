@@ -41,6 +41,7 @@ UNCONFIRMED_SUBMIT = "message not submitted"
 # The composer could not be found — a dialog or menu has the keyboard. Reported as a delivery
 # FAILURE, never as a send: the bridge may only type where it can see the composer.
 BLOCKED_BY_OVERLAY = "interactive overlay blocks the input"
+DIALOG_KEYS = frozenset({"Up", "Down", "Enter", "Escape", *"123456789"})
 HOLDS, CLEAR, UNKNOWN = "holds", "clear", "unknown"
 _PROMPT_RE = re.compile(r"^[❯›>]\s?")
 # "❯ 1. Yes, I trust this folder" — the highlighted row of a selection dialog carries the SAME
@@ -393,6 +394,20 @@ class TmuxSession:
         raise SessionError(
             f"{BLOCKED_BY_OVERLAY}: the composer in tmux session '{self.name}' does not have the "
             "keyboard — an interactive dialog or menu is on screen")
+
+    def dialog_snapshot(self) -> tuple[str, bool]:
+        """The pane text and whether the composer has the keyboard (False = a dialog is up)."""
+        view = self._pane_view()
+        return view.text, self._composer_text(view) is not None
+
+    def press_dialog_key(self, key: str) -> None:
+        """Send ONE navigation key to a dialog the user chose to answer from Telegram."""
+        if key not in DIALOG_KEYS:
+            raise SessionError(f"refusing to send key {key!r} to a dialog")
+        ok, detail = self._pane_ok()
+        if not ok:
+            raise SessionError(f"refusing to press {key} in tmux session '{self.name}': {detail}")
+        _tmux("send-keys", "-t", self.name, key, check=False)
 
     def _clear_composer(self, attempts: int = 200, pause: float = 0.08) -> bool:
         """Clear whatever is in the composer and PROVE it is empty before returning True.

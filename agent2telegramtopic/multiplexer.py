@@ -535,6 +535,12 @@ class Multiplexer:
             self._save_offset(next_offset)
             return next_offset
 
+        if isinstance(upd.get("callback_query"), dict):
+            self._handle_callback_query(upd)
+            self._mark_update_processed(update_id)
+            self._save_offset(next_offset)
+            return next_offset
+
         # Delta (b): agent2telegramtopic' private-chat and sender allowlist is applied before lane creation.
         allowed = routing.is_allowed(upd, self.allowed)
         if not allowed:
@@ -662,6 +668,29 @@ class Multiplexer:
         self._mark_update_processed(update_id)
         return next_offset
 
+    def _handle_callback_query(self, upd: dict) -> None:
+        """A tap on a dialog button. Only an allowed user's tap on a live lane reaches its
+        dialog; every tap is answered so the button stops spinning."""
+        cq = upd["callback_query"]
+        toast = None
+        try:
+            key = routing.callback_key(upd)
+            with self._lane_lock:
+                lane = self._lanes.get(key) if key is not None and key in self._started_lanes else None
+            if routing.is_allowed(upd, self.allowed) and lane is not None:
+                toast = lane.handle_dialog_callback(cq)
+            elif routing.is_allowed(upd, self.allowed):
+                toast = "Tahle volba už neplatí."
+            else:
+                self.log.warning("Ignoring callback_query from a disallowed user update_id=%s",
+                                 upd.get("update_id"))
+        except Exception as e:
+            self.log.error("callback_query error: error=%s", type(e).__name__)
+        try:
+            self.tg.answer_callback_query(cq.get("id"), toast)
+        except Exception as e:
+            self.log.warning("could not answer callback_query: %s", type(e).__name__)
+
     # Ported from agent2telegram attach.py:_maybe_ack_queued (MIT).
     # Delta (a): busy state and acknowledgement are scoped to the selected topic lane.
     def _maybe_ack_queued(self, upd: dict, lane) -> None:
@@ -707,7 +736,7 @@ class Multiplexer:
                 updates = self.tg._call(
                     "getUpdates",
                     {"offset": offset, "timeout": self.poll_timeout,
-                     "allowed_updates": json.dumps(["message", "edited_message", "message_reaction"])},
+                     "allowed_updates": json.dumps(["message", "edited_message", "message_reaction", "callback_query"])},
                     timeout=self.poll_timeout + 15,
                 )
             except (TelegramError, OSError) as e:

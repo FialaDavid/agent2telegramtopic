@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from pathlib import Path
 import threading
 import time
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .background import SubagentWatcher, _epoch as _record_wall_time
@@ -30,7 +32,7 @@ from .inbound import sender_label
 from .redaction import message_metadata, update_metadata
 from .routing import LaneKey
 from .telegram import split_message
-from . import readers, transcript, tts, usage
+from . import dialog, readers, transcript, tts, usage
 from .session import BLOCKED_BY_OVERLAY, SessionError
 
 log = logging.getLogger(__name__)
@@ -74,6 +76,9 @@ INTERNAL_COMMAND_TIMEOUT = 300.0
 SUSPICIOUS_TURN_SECONDS = 3.0
 # Ported from agent2telegram attach.py (MIT).
 INJECT_ATTEMPTS = 3
+DIALOG_POLL = 5.0
+DIALOG_CHANGED = "Dialog se mezitím změnil."
+DIALOG_CLOSED = "Dialog byl zavřen v terminálu."
 INJECT_RETRY_WAIT = 1.5
 INBOUND_MAX_ATTEMPTS = 5
 # How often a message left in durable storage is retried WHILE RUNNING. Without this it waited
@@ -174,6 +179,19 @@ def _extract_tui_tools(pane: str) -> list:
     return out
 
 
+@dataclass
+class _DialogBubble:
+    digest: str
+    message_id: int
+    dialog: "dialog.Dialog"
+    tokens: dict            # callback_data -> option index (None = Escape)
+    checked: float
+
+
+def _button_label(label: str, limit: int = 48) -> str:
+    return label if len(label) <= limit else label[:limit - 1] + "…"
+
+
 class LaneTelegram:
     """Bind Telegram sends to one topic (delta b)."""
 
@@ -208,6 +226,14 @@ class LaneTelegram:
     def send_chat_action(self, chat, action):
         del chat
         return self.client.send_chat_action(self.key, action)
+
+    def send_inline_keyboard(self, chat, text, rows):
+        del chat
+        return self._record(self.client.send_inline_keyboard(self.key, text, rows))
+
+    def edit_clear_keyboard(self, chat, message_id, text):
+        del chat
+        return self.client.edit_clear_keyboard(self.key, message_id, text)
 
     def send_file(self, chat, path, **kwargs):
         del chat
@@ -392,6 +418,8 @@ class LaneBridge:
         inbox = self._ensure_inbox()
         if inbox is None:
             return 0
+        if self._dialog is not None:
+            return 0        # pending messages wait for the dialog; closing it replays them
         inflight = set(self._inbound_inflight())
         try:
             waiting = inbox.pending()
@@ -459,7 +487,10 @@ class LaneBridge:
                     continue
                 if delivered is not False:
                     log.info("IN delivered to session id=%s", record_id)
-                if delivered is False:
+                if delivered is False and self._take_inbound_deferred():
+                    # Parked behind a dialog the owner is answering: still pending, not a failure.
+                    self._inbound_inflight().discard(record_id)
+                elif delivered is False:
                     self._inbound_failed(record_id, "not delivered to the session")
                 else:
                     self._inbound_done(record_id)
@@ -998,10 +1029,164 @@ class LaneBridge:
                 last_error = e
             if attempt < INJECT_ATTEMPTS:
                 self._stop.wait(INJECT_RETRY_WAIT)
+        self._turn_active.clear()
+        if BLOCKED_BY_OVERLAY in str(last_error) and self._offer_dialog():
+            self._inbound_deferred = True
+            return False
         log.error("inject failed after %d attempts: error=%s %s", INJECT_ATTEMPTS,
                   type(last_error).__name__, message_metadata(text))
-        self._turn_active.clear()
         self._defer_or_notify_inject_failure("generic", text, str(last_error))
+        return False
+
+    # ---- interactive dialogs blocking delivery (forwarded to Telegram as a button bubble) ----
+    @property
+    def _dialog(self):
+        return getattr(self, "_dialog_bubble", None)
+
+    def _take_inbound_deferred(self) -> bool:
+        deferred = getattr(self, "_inbound_deferred", False)
+        self._inbound_deferred = False
+        return deferred
+
+    def _dialog_lock(self):
+        if not hasattr(self, "_dialog_rlock"):
+            self._dialog_rlock = threading.RLock()
+        return self._dialog_rlock
+
+    def _offer_dialog(self) -> bool:
+        """The composer is blocked by a dialog: show it in the topic as ONE bubble with buttons.
+
+        True = the blocked message is parked (bubble open, or the dialog is already gone and the
+        message will be replayed). False = the pane could not be read, so the ordinary delivery
+        failure applies. Sends no key to tmux.
+        """
+        with self._dialog_lock():
+            try:
+                pane, focused = self._session.dialog_snapshot()
+            except Exception as e:
+                log.warning("could not read the blocking dialog: %s", type(e).__name__)
+                return False
+            if focused:
+                self._last_inbound_retry = 0.0
+                return True
+            self._show_dialog(pane)
+            return True
+
+    def _show_dialog(self, pane: str) -> None:
+        dlg = dialog.parse(pane)
+        current = self._dialog
+        if current is not None:
+            if current.digest == dlg.digest:
+                return
+            self.tg.edit_clear_keyboard(self.key.chat_id, current.message_id, DIALOG_CHANGED)
+            self._dialog_bubble = None
+        who = "Claude Code" if (self.agent or "claude-code") == "claude-code" else "Agent"
+        text = "\n\n".join(p for p in (f"⚠️ {who} čeká na tvou volbu", dlg.body,
+                                        "Tvoje zpráva počká, až dialog zavřeš.") if p)
+        tokens, rows = {}, []
+        for index, option in enumerate(dlg.options):
+            tokens[self._new_token(tokens)] = index
+        for token, index in tokens.items():
+            rows.append([{"text": _button_label(dlg.options[index].label), "callback_data": token}])
+        esc = self._new_token(tokens)
+        tokens[esc] = None
+        rows.append([{"text": "Zrušit (Esc)", "callback_data": esc}])
+        message_id = self.tg.send_inline_keyboard(self.key.chat_id, text, rows)
+        if message_id is None:
+            return
+        self._dialog_bubble = _DialogBubble(dlg.digest, message_id, dlg, tokens, time.monotonic())
+
+    @staticmethod
+    def _new_token(taken: dict) -> str:
+        while True:
+            token = "dlg:" + secrets.token_hex(4)
+            if token not in taken:
+                return token
+
+    def _close_dialog(self, note: str) -> None:
+        bubble = self._dialog
+        self._dialog_bubble = None
+        if bubble is not None:
+            self.tg.edit_clear_keyboard(self.key.chat_id, bubble.message_id, note)
+
+    def _dialog_tick(self) -> None:
+        """While a bubble is open, look at the pane about every DIALOG_POLL seconds."""
+        with self._dialog_lock():
+            bubble = self._dialog
+            if bubble is None or time.monotonic() - bubble.checked < DIALOG_POLL:
+                return
+            bubble.checked = time.monotonic()
+            try:
+                pane, focused = self._session.dialog_snapshot()
+            except Exception as e:
+                log.warning("dialog re-check failed: %s", type(e).__name__)
+                return
+            if focused:
+                self._close_dialog(DIALOG_CLOSED)
+                self._replay_pending_inbound()
+            else:
+                self._show_dialog(pane)
+
+    def _refresh_after_key(self) -> None:
+        """After a click: deliver the parked messages, or show whatever dialog came next."""
+        self._stop.wait(0.5)
+        pane, focused = self._session.dialog_snapshot()
+        if focused:
+            self._replay_pending_inbound()
+        else:
+            self._show_dialog(pane)
+
+    def handle_dialog_callback(self, cq: dict) -> str | None:
+        """A tap on one of the bubble's buttons (already checked to come from an allowed user).
+        Returns a short toast for the tap, or None."""
+        with self._dialog_lock():
+            bubble = self._dialog
+            message = cq.get("message") or {}
+            chat = message.get("chat") or {}
+            if (bubble is None or message.get("message_id") != bubble.message_id
+                    or chat.get("id") != self.key.chat_id
+                    or cq.get("data") not in bubble.tokens):
+                return "Tahle volba už neplatí."
+            choice = bubble.tokens[cq["data"]]
+            pane, focused = self._session.dialog_snapshot()
+            if focused:
+                self._close_dialog(DIALOG_CLOSED)
+                self._replay_pending_inbound()
+                return None
+            now = dialog.parse(pane)
+            if now.digest != bubble.digest:
+                self._show_dialog(pane)
+                return None
+            if choice is None:
+                self._session.press_dialog_key("Escape")
+                label = "✓ Zrušeno"
+            else:
+                option = bubble.dialog.options[choice]
+                if option.key is not None:
+                    self._session.press_dialog_key(option.key)
+                elif not self._move_to(bubble, now, choice):
+                    self._dialog_bubble = None
+                    self.tg.edit_clear_keyboard(self.key.chat_id, bubble.message_id, DIALOG_CHANGED)
+                    self._show_dialog(self._session.dialog_snapshot()[0])
+                    return None
+                else:
+                    self._session.press_dialog_key("Enter")
+                label = f"✓ Vybráno: {option.label}"
+            self._close_dialog(label)
+            self._refresh_after_key()
+            return None
+
+    def _move_to(self, bubble, now, target: int) -> bool:
+        """Move the highlight to option `target` and PROVE it is there before Enter is sent."""
+        step = target - now.highlighted
+        for _ in range(abs(step)):
+            self._session.press_dialog_key("Down" if step > 0 else "Up")
+            self._stop.wait(0.15)
+        for _ in range(8):
+            seen = dialog.parse(self._session.dialog_snapshot()[0])
+            if seen.digest == bubble.digest and seen.highlighted == target:
+                return True
+            self._stop.wait(0.2)
         return False
 
     def _defer_or_notify_inject_failure(self, kind: str, text: str, reason: str) -> None:
@@ -1881,6 +2066,7 @@ class LaneBridge:
             # Replay only at startup meant, for a long-running service, waiting forever.
             # An outbound-only startup recovery can run before a parked lane gets a
             # tmux session. Keep inbox replay dormant until the lane is activated.
+            self._dialog_tick()
             if (not getattr(self, "_defer_inbound_replay", False)
                     and time.monotonic() - getattr(self, "_last_inbound_retry", 0.0) > INBOUND_RETRY_INTERVAL):
                 self._last_inbound_retry = time.monotonic()

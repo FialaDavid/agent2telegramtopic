@@ -351,7 +351,7 @@ class TelegramClient:
         return self._call("getMe", timeout=15)
 
     def get_updates(self, offset: int | None, timeout: int = 30) -> list[dict]:
-        params = {"timeout": timeout, "allowed_updates": json.dumps(["message"])}
+        params = {"timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}
         if offset is not None:
             params["offset"] = offset
         # Network timeout must exceed the long-poll timeout, else we'd cancel mid-poll.
@@ -459,6 +459,33 @@ class TelegramClient:
             params["parse_mode"] = parse_mode
         try:
             self._call("editMessageText", params, timeout=SEND_TIMEOUT)
+        except TelegramError:
+            pass
+
+    def send_inline_keyboard(self, key: LaneKey, text: str, rows: list[list[dict]]) -> int | None:
+        """Send a plain-text message with an inline keyboard; returns its message_id."""
+        params = {**reply_params(key), "text": text, "disable_web_page_preview": "true",
+                  "reply_markup": json.dumps({"inline_keyboard": rows})}
+        try:
+            return self._call("sendMessage", params, timeout=SEND_TIMEOUT).get("message_id")
+        except TelegramError:
+            return None
+
+    def edit_clear_keyboard(self, key: LaneKey, message_id: int, text: str) -> None:
+        """Replace a message's text and remove its inline keyboard."""
+        params = {**reply_params(key), "message_id": message_id, "text": text,
+                  "reply_markup": json.dumps({"inline_keyboard": []})}
+        try:
+            self._call("editMessageText", params, timeout=SEND_TIMEOUT)
+        except TelegramError:
+            pass
+
+    def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        params = {"callback_query_id": callback_query_id}
+        if text:
+            params["text"] = text
+        try:
+            self._call("answerCallbackQuery", params, timeout=15, retries=0)
         except TelegramError:
             pass
 

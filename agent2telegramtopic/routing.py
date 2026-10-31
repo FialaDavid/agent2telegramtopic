@@ -36,6 +36,13 @@ def is_allowed(update: dict, allowed_users) -> bool:
         user = reaction.get("user")
         return (isinstance(chat, dict) and chat.get("type") == "private"
                 and isinstance(user, dict) and user.get("id") in allowed_users)
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        message = callback.get("message")
+        chat = message.get("chat") if isinstance(message, dict) else None
+        user = callback.get("from")
+        return (isinstance(chat, dict) and chat.get("type") == "private"
+                and isinstance(user, dict) and user.get("id") in allowed_users)
     message = update.get("message")
     if not isinstance(message, dict):
         message = update.get("edited_message")
@@ -52,6 +59,13 @@ def _message_key(message: dict) -> LaneKey | None:
     if not isinstance(chat, dict) or "id" not in chat:
         return None
     return LaneKey(chat["id"], message.get("message_thread_id", GENERAL_THREAD_ID))
+
+
+def callback_key(update: dict) -> LaneKey | None:
+    """The lane a button click belongs to: the topic of the message carrying the button."""
+    callback = update.get("callback_query")
+    message = callback.get("message") if isinstance(callback, dict) else None
+    return _message_key(message) if isinstance(message, dict) else None
 
 
 def topic_event(update: dict) -> tuple[LaneKey, str] | None:

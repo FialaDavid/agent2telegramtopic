@@ -91,7 +91,7 @@ def test_get_updates():
     transport = FakeTransport({"ok": True, "result": [{"update_id": 2}]})
     client = TelegramClient("secret", opener=TransportOpener(transport))
     assert client.get_updates(7) == [{"update_id": 2}]
-    assert transport.calls == [("getUpdates", {"timeout": 30, "allowed_updates": '["message"]', "offset": 7})]
+    assert transport.calls == [("getUpdates", {"timeout": 30, "allowed_updates": '["message", "callback_query"]', "offset": 7})]
 
 
 def test_split_message_prefers_paragraph_line_and_word_boundaries():

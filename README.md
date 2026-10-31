@@ -43,6 +43,16 @@ library.
   rollout log. Data appears after the agent's first reply and is marked stale after an hour.
 - **Progress.** A live status bubble shows what the agent is doing while it works.
 
+### Dialogs that block a message
+
+If a message arrives while the agent's terminal shows an interactive dialog (a trust prompt, a
+nudge, a picker), the bridge cannot type into it. It then sends **one** bubble into the topic with
+the dialog's text and a button per option read from the screen, plus `Zrušit (Esc)`. Your message
+stays queued (it is not dropped or counted as a failed delivery) and is delivered as soon as the
+dialog is gone, whether you tapped a button or closed it in the terminal. A tap sends only that
+choice's keys, after re-checking that the same dialog is still on screen; the bridge never picks an
+option by itself and never looks for dialogs except when a message is blocked.
+
 ### Commands
 
 | Command | What it does |
