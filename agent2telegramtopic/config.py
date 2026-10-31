@@ -227,6 +227,10 @@ def hooks_settings_file(bot_name: str, home: Path | None = None) -> Path:
     return state_dir(home) / f"{bot_name}.hooks.json"
 
 
+def status_file(bot_name: str, home: Path | None = None) -> Path:
+    return state_dir(home) / f"{bot_name}.status.json"
+
+
 def lanes_root(bot_name: str, home: Path | None = None) -> Path:
     return app_dir(home) / "topics" / bot_name
 

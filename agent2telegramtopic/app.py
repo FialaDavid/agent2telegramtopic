@@ -14,11 +14,12 @@ from pathlib import Path
 from agent2telegramtopic import redaction
 from agent2telegramtopic.config import (CONFIG_ENV, Config, app_dir, bot_token, build_config, config_file, hooks_settings_file,
                                  is_default_instance, lane_path, lane_state_file, load_config,
-                                 lanes_root, state_db_path, write_hooks_settings)
+                                 lanes_root, state_db_path, status_file, write_hooks_settings)
 from agent2telegramtopic.lane import BOT_COMMANDS, LaneBridge
 from agent2telegramtopic.multiplexer import Multiplexer
 from agent2telegramtopic.lock import AlreadyRunning, lock_file, single_instance_lock
 from agent2telegramtopic.state import Lane, LaneStore
+from agent2telegramtopic.status import StatusWriter
 from agent2telegramtopic.telegram import TelegramClient
 from agent2telegramtopic.tmux import launch_argv, session_name
 from agent2telegramtopic.session import TmuxSession
@@ -202,6 +203,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                       compact_min_tokens=config.compact_min_tokens,
                       idle_minutes=config.idle_compact_minutes)
     multiplexer_ref["mux"] = mux
+    mux.status_writer = StatusWriter(status_file(config.bot_name), config, config_file(), lane_store, root)
     return mux
 
 

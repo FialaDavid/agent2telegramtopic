@@ -37,7 +37,13 @@ class LaneStore:
         self._lock = RLock()
         self._db = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
         self._db.execute("PRAGMA busy_timeout = 30000")
+        # Called (no arguments) after every change a status monitor would care about.
+        self.on_change = None
         self._initialize()
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
 
     def _connect(self) -> sqlite3.Connection:
         return self._db
@@ -105,6 +111,16 @@ class LaneStore:
                     PRIMARY KEY (chat_id, thread_id)
                 )"""
             )
+            # Topic names Telegram announced. Kept apart from lanes: a topic is created before
+            # its first message gives it a lane row.
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS topic_titles (
+                    chat_id INTEGER NOT NULL,
+                    thread_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, thread_id)
+                )"""
+            )
 
     @staticmethod
     def _lane(row: tuple) -> Lane:
@@ -136,6 +152,7 @@ class LaneStore:
                  lane.status, int(lane.busy), lane.last_activity, lane.last_compact,
                  lane.ctx_tokens),
             )
+        self._changed()
 
     def list_live(self) -> list[Lane]:
         with self._lock, self._connect() as db:
@@ -170,11 +187,13 @@ class LaneStore:
                 key = LaneKey(chat_id, thread_id)
                 db.execute("UPDATE lanes SET status = ?, busy = 0 WHERE chat_id = ? AND thread_id = ?",
                            ("live" if key in live_keys else "parked", chat_id, thread_id))
+        self._changed()
 
     def set_status(self, key: LaneKey, status: LaneStatus) -> None:
         with self._lock, self._connect() as db:
             db.execute("UPDATE lanes SET status = ? WHERE chat_id = ? AND thread_id = ?",
                        (status, key.chat_id, key.thread_id))
+        self._changed()
 
     def touch(self, key: LaneKey, ts: float) -> None:
         with self._lock, self._connect() as db:
@@ -191,11 +210,25 @@ class LaneStore:
             db.execute("UPDATE lanes SET last_compact = ?, ctx_tokens = ? "
                        "WHERE chat_id = ? AND thread_id = ?",
                        (ts, ctx_tokens, key.chat_id, key.thread_id))
+        self._changed()
 
     def set_busy(self, key: LaneKey, busy: bool) -> None:
         with self._lock, self._connect() as db:
             db.execute("UPDATE lanes SET busy = ? WHERE chat_id = ? AND thread_id = ?",
                        (int(busy), key.chat_id, key.thread_id))
+        self._changed()
+
+    def set_topic_title(self, key: LaneKey, title: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("INSERT INTO topic_titles (chat_id, thread_id, title) VALUES (?, ?, ?) "
+                       "ON CONFLICT(chat_id, thread_id) DO UPDATE SET title=excluded.title",
+                       (key.chat_id, key.thread_id, title))
+        self._changed()
+
+    def topic_titles(self) -> dict[LaneKey, str]:
+        with self._lock, self._connect() as db:
+            rows = db.execute("SELECT chat_id, thread_id, title FROM topic_titles").fetchall()
+        return {LaneKey(chat_id, thread_id): title for chat_id, thread_id, title in rows}
 
     def record_message(self, chat_id: int, message_id: int, thread_id: int) -> None:
         with self._lock, self._connect() as db:

@@ -65,6 +65,8 @@ class Multiplexer:
         self._slot_thread = None
         self._slot_lock = threading.RLock()
         self._watcher_thread = None
+        # Optional StatusWriter (status.py), started and stopped by run_forever.
+        self.status_writer = None
 
     def _idle_ctx_tokens(self, bridge):
         reader = getattr(bridge, "_internal_context_tokens", None)
@@ -495,6 +497,21 @@ class Multiplexer:
         except Exception:
             self.log.exception("could not check or announce disabled topics")
 
+    def _record_topic_title(self, upd: dict) -> None:
+        """Remember the name carried by a forum_topic_created / forum_topic_edited service message
+        (an icon-only edit carries none), for the status file."""
+        msg = upd.get("message")
+        if self.lane_store is None or not isinstance(msg, dict) or not isinstance(msg.get("chat"), dict):
+            return
+        for field in ("forum_topic_created", "forum_topic_edited"):
+            event = msg.get(field)
+            name = event.get("name") if isinstance(event, dict) else None
+            if isinstance(name, str) and name:
+                # A creation message with no thread id is itself the topic's thread id.
+                thread_id = msg.get("message_thread_id", msg.get("message_id") if field == "forum_topic_created" else None)
+                if type(thread_id) is int and thread_id != routing.GENERAL_THREAD_ID:
+                    self.lane_store.set_topic_title(routing.LaneKey(msg["chat"]["id"], thread_id), name)
+
     # Delta (a): route to a per-topic LaneBridge by LaneKey instead of a2t's single session.
     # Delta (b): apply agent2telegramtopic' existing private-chat and sender allowlist at the top.
     # Delta (c): keep offset and processed ledger in the bot-level state directory.
@@ -532,9 +549,12 @@ class Multiplexer:
                              update_id, chat.get("id") if isinstance(chat, dict) else None,
                              chat.get("type") if isinstance(chat, dict) else None,
                              sender.get("id") if isinstance(sender, dict) else None, update_metadata(upd))
+            if own:
+                self._record_topic_title(upd)
             self._mark_update_processed(update_id)
             self._save_offset(next_offset)
             return next_offset
+        self._record_topic_title(upd)
         self._warn_topics_disabled(upd)
         reaction = upd.get("message_reaction")
         if isinstance(reaction, dict):
@@ -732,4 +752,10 @@ class Multiplexer:
         if self.lane_store is not None and self._watcher_thread is None:
             self._watcher_thread = threading.Thread(target=self._idle_watcher_loop, daemon=True)
             self._watcher_thread.start()
-        self._inbound_loop()
+        if self.status_writer is not None:
+            self.status_writer.start()
+        try:
+            self._inbound_loop()
+        finally:
+            if self.status_writer is not None:
+                self.status_writer.stop()

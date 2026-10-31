@@ -157,6 +157,12 @@ yourself rather than pasting the token into an agent chat.
   `workdir` replaces that whole root (`topics/<bot>`): lanes then live at `<workdir>/<chat>/<topic>`,
   and the bot name is not appended.
 
+## Status file for monitors
+
+Each bridge writes `state/<Bot>.status.json` (lanes, liveness, busy, context tokens, topic titles,
+a heartbeat) every 15 seconds and on lane changes, so a monitor never has to read the database or
+the config. Schema and rules: [docs/status-file.md](docs/status-file.md).
+
 ## Several bots
 
 One machine can run several bots side by side, each with its own token, allowed users, state and
