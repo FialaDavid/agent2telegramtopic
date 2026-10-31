@@ -153,8 +153,9 @@ yourself rather than pasting the token into an agent chat.
   them: `TMUX_TMPDIR=~/.agent2telegramtopic/tmux tmux ls` (then `tmux attach -t "<name>"`). The bridge
   creates that directory itself at start; tmux would otherwise ignore a missing `TMUX_TMPDIR` and
   fall back to the shared default server.
-- Every topic gets its own working directory under `~/.agent2telegramtopic/topics/<bot>/<chat>/<topic>`
-  (override the root with `workdir`).
+- Every topic gets its own working directory under `~/.agent2telegramtopic/topics/<bot>/<chat>/<topic>`.
+  `workdir` replaces that whole root (`topics/<bot>`): lanes then live at `<workdir>/<chat>/<topic>`,
+  and the bot name is not appended.
 
 ## Several bots
 
@@ -229,7 +230,7 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 | `compact_min_tokens` | `30000` | Minimum context size that is worth compacting |
 | `claude_cmd` | `claude --dangerously-skip-permissions` | Command used to start Claude Code |
 | `codex_cmd` | `codex -c check_for_update_on_startup=false --dangerously-bypass-approvals-and-sandbox` | Command used to start Codex |
-| `workdir` | `""` | Root for topic working directories (empty = under `~/.agent2telegramtopic/topics`) |
+| `workdir` | `""` | The lane root itself: topic directories are `<workdir>/<chat>/<topic>`, the bot name is not appended (empty = `~/.agent2telegramtopic/topics/<bot>`) |
 | `file_marker` | `[tg-file]` | Line prefix the agent uses to send a file |
 | `outbox_dirs` | `[]` | Extra folders the agent may send files from |
 | `background_progress` | `true` | Also show sub-agent / background-task progress |
