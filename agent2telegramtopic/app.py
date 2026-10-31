@@ -176,10 +176,18 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                         summary_error = "the agent was busy"
                     elif not event.wait(lane_module.INTERNAL_COMMAND_TIMEOUT + 30) or bridge._internal_timed_out:
                         summary_error = "the summary turn timed out"
+                    elif bridge._summary_error:
+                        summary_error = bridge._summary_error
                     elif not bridge._summary_text:
                         summary_error = "the agent returned no summary"
                     else:
                         summary = bridge._summary_text
+                if bridge._internal_timed_out and session_obj is not None and session_alive():
+                    bridge._closing = False
+                    lane_store.set_status(key, "live")
+                    lane_store.set_busy(key, False)
+                    bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                    return
                 if session_obj is not None:
                     if session_alive() and lane_store.get(key).ctx_tokens >= config.compact_min_tokens:
                         event = bridge.compact_internal()
@@ -220,16 +228,18 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     bridge.stop()
                     bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
                     return
-                try:
-                    inbox = bridge._ensure_inbox()
-                    pending = inbox is not None and bool(inbox.pending())
-                except Exception:
-                    pending = False
-                # A message sent while closing must still be answered: resume instead of archiving.
-                lane_store.set_status(key, "waiting" if pending else "archived")
-                lane_store.set_busy(key, False)
-                mux._retire_parked_lane(key, bridge)
-                bridge.stop()
+                with mux._lane_lock:
+                    try:
+                        inbox = bridge._ensure_inbox()
+                        pending = inbox is not None and bool(inbox.pending())
+                    except Exception:
+                        pending = False
+                    # Routing reserves before taking this lock, so the final snapshot
+                    # sees every earlier reservation; later routes revalidate ownership.
+                    lane_store.set_status(key, "waiting" if pending else "archived")
+                    lane_store.set_busy(key, False)
+                    mux._retire_parked_lane(key, bridge)
+                    bridge.stop()
                 mux._slot_wakeup.set()
                 bridge.tg.send_message(
                     key.chat_id, "🗄️ Archived. You can delete this topic; writing here again resumes the session.")

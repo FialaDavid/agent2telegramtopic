@@ -151,6 +151,17 @@ def test_summary_that_never_arrives_still_archives_with_null_summary(world, tmp_
     assert mux.lane_store.get(KEY).status == "archived"
 
 
+def test_summary_timeout_with_live_session_reports_failure_and_keeps_lane_live(world, tmp_path, monkeypatch):
+    monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.1)
+    mux, bridge, client = world("claude-code", answer=None)
+    bridge._session.close = lambda: None
+    mux.lane_store.set_ctx_tokens(KEY, 100000)
+    close_and_wait(bridge, client, mux)
+    assert client.sent == [(KEY, "⚠️ Couldn't close this topic's session. Try again.")]
+    assert mux.lane_store.get(KEY).status == "live"
+    assert not (tmp_path / "state" / "bot" / "archive" / "index.jsonl").exists()
+
+
 def test_closing_twice_appends_instead_of_overwriting(world, tmp_path):
     mux, bridge, client = world("claude-code")
     close_and_wait(bridge, client, mux)
@@ -170,6 +181,57 @@ def test_lane_without_a_live_session_is_archived_without_starting_one(world, tmp
     assert record["summary"] is None and record["summary_error"] is None
     assert bridge._session.commands == []
     assert mux.lane_store.get(KEY).status == "archived"
+
+
+def test_routed_close_for_parked_lane_archives_without_slot_activation(world, tmp_path, monkeypatch):
+    mux, bridge, client = world("claude-code")
+    bridge.stop()
+    mux.lane_store.set_status(KEY, "parked")
+    mux._lanes.clear()
+    mux._started_lanes.clear()
+    activated = []
+
+    class ShouldNotActivate:
+        def __init__(self, *args, **kwargs):
+            activated.append(True)
+            raise AssertionError("parked /close activated a session")
+
+    monkeypatch.setattr(app_module, "TmuxSession", ShouldNotActivate)
+    mux._start_slot_manager()
+    mux._handle_update_once({"update_id": 10, "message": {
+        "chat": {"id": 123, "type": "private"}, "message_thread_id": 42,
+        "from": {"id": 8}, "text": "/close"}}, 0)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not client.sent:
+        time.sleep(0.02)
+    mux.stop()
+    (record,) = records(tmp_path)
+    assert record["summary"] is None and record["summary_error"] is None
+    assert client.sent == [(KEY, CONFIRMATION)]
+    assert not activated
+
+
+def test_private_summary_boundary_survives_resume_rewind(tmp_path, monkeypatch):
+    from agent2telegramtopic.lane import LaneBridge
+
+    transcript = tmp_path / "resume.jsonl"
+    lines = [
+        {"type": "user", "message": {"content": "Telegram: /close"}},
+        {"type": "user", "message": {"content": "Please summarize this topic."}},
+        {"type": "assistant", "uuid": "private-summary", "message": {
+            "content": [{"type": "text", "text": SUMMARY}] }},
+    ]
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in lines))
+    bridge = LaneBridge(Client(), KEY, tmp_path / "sent", tmp_path / "queue", agent="claude-code")
+    bridge._transcript = transcript
+    bridge._sent_keys.add("previous-public-reply")
+    bridge._private_boundary.write_text(str(transcript.stat().st_size))
+    monkeypatch.setattr(bridge, "_maybe_reresolve", lambda: None)
+    monkeypatch.setattr(bridge, "_arm_background", lambda: None)
+    monkeypatch.setattr(bridge, "_cleanup_orphan_status", lambda: None)
+    monkeypatch.setattr(bridge, "_start_background", lambda: None)
+    bridge._prepare_start()
+    assert bridge._tpos == transcript.stat().st_size
 
 
 def test_archived_lane_is_not_listed_nor_counted_as_live(tmp_path):
@@ -198,6 +260,36 @@ def test_old_database_is_migrated_and_keeps_its_lanes(tmp_path):
     assert store.get(LaneKey(1, 2)).session_id == "sid"
     store.set_status(LaneKey(1, 2), "archived")
     assert store.get(LaneKey(1, 2)).status == "archived"
+
+
+def test_failed_status_migration_rolls_back_original_rows(tmp_path, monkeypatch):
+    import sqlite3
+    from agent2telegramtopic import state as state_module
+
+    path = tmp_path / "interrupted.db"
+    db = sqlite3.connect(path)
+    db.execute("""CREATE TABLE lanes (chat_id INTEGER NOT NULL, thread_id INTEGER NOT NULL,
+        name TEXT NOT NULL, agent TEXT NOT NULL, session_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('live', 'parked', 'waiting')),
+        busy INTEGER NOT NULL, last_activity REAL NOT NULL, last_compact REAL,
+        ctx_tokens INTEGER NOT NULL, PRIMARY KEY (chat_id, thread_id))""")
+    db.execute("INSERT INTO lanes VALUES (5, 6, 'orig', 'codex', 'sid', 'parked', 0, 1.0, NULL, 7)")
+    db.commit()
+    db.close()
+    real_connect = sqlite3.connect
+
+    def interrupted_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_authorizer(lambda action, arg1, arg2, _db, _source:
+            sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_INSERT and arg1 == "lanes" else sqlite3.SQLITE_OK)
+        return connection
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(state_module.sqlite3, "connect", interrupted_connect)
+        with pytest.raises(sqlite3.DatabaseError):
+            LaneStore(path)
+    reopened = LaneStore(path)
+    assert reopened.get(LaneKey(5, 6)) == Lane(5, 6, "orig", "codex", "sid", "parked", False, 1.0, None, 7)
 
 
 def test_message_in_an_archived_topic_resumes_the_same_session(world, tmp_path, monkeypatch):

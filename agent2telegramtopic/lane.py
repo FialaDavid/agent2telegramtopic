@@ -352,12 +352,15 @@ class LaneBridge:
         # "compact" or "summary": which private turn _internal_turn stands for.
         self._internal_kind = "compact"
         self._summary_text = ""
+        self._summary_error = None
         self._internal_turn_done = threading.Event()
         self._internal_lock = threading.RLock()
         self._internal_deadline = None
         self._internal_turn_id = None
         self._internal_compacted_turn_id = None
         self._internal_timed_out = False
+        self._internal_compaction_succeeded = False
+        self._private_boundary = self._sent_path.parent / "private_turn_boundary"
         self._compact_ctx_before = None
         self._compact_done = self._sent_path.parent / "compact_done"
         self._typing_count = 0
@@ -944,8 +947,10 @@ class LaneBridge:
             self._compact_ctx_before = self._internal_context_tokens()
             self._internal_turn_id = None
             self._internal_compacted_turn_id = None
+            self._internal_compaction_succeeded = False
             self._internal_kind = kind
             self._summary_text = ""
+            self._summary_error = None
             if self._compact_done:
                 try:
                     self._compact_done.unlink()
@@ -1014,7 +1019,7 @@ class LaneBridge:
                     log.error("timed-out lane session is still alive; holding inbound injection")
                     self._stop.set()
                     return
-                if self._on_parked is not None:
+                if self._on_parked is not None and not self._closing:
                     try:
                         self._on_parked(self.key)
                     except Exception as exc:
@@ -1436,12 +1441,18 @@ class LaneBridge:
                     continue
                 if self._internal_turn and self._internal_kind == "compact" and self.agent == "codex":
                     payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+                    if (rec.get("type") == "system" and rec.get("subtype") == "local_command"
+                            and "Not enough messages to compact." in str(rec.get("content", ""))):
+                        self._tpos += consumed
+                        self._finish_turn()
+                        return
                     # Codex's rollout compacted record has no turn_id. Its task_started
                     # event immediately preceding it identifies the internal turn.
                     if payload.get("type") == "task_started":
                         self._internal_turn_id = payload.get("turn_id")
                     if (rec.get("type") == "compacted" and self._internal_turn_id is not None):
                         self._internal_compacted_turn_id = self._internal_turn_id
+                        self._internal_compaction_succeeded = True
                     if (payload.get("type") == "task_complete"
                             and self._internal_compacted_turn_id is not None
                             and payload.get("turn_id") == self._internal_compacted_turn_id):
@@ -1451,6 +1462,13 @@ class LaneBridge:
                     # Compaction transcript records are private until its matching completion.
                     continue
                 self._rec_live = self._record_is_live(rec_off, rec)
+                if (self._internal_turn and self._internal_kind == "compact"
+                        and self.agent == "claude-code" and rec.get("type") == "system"
+                        and rec.get("subtype") == "local_command"
+                        and "Not enough messages to compact." in str(rec.get("content", ""))):
+                    self._tpos += consumed
+                    self._finish_turn()
+                    return
                 for ev in self._reader.parse(rec):
                     self._handle_event(ev)
                     # Delta (10.2): stop at a Codex completion boundary. The next tick
@@ -1464,6 +1482,7 @@ class LaneBridge:
         self._tpos += nl + 1
         if (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "compact"
                 and self._compact_done.exists()):
+            self._internal_compaction_succeeded = True
             self._finish_turn()
         if self._turn_from_tg:
             self._last_activity = time.monotonic()
@@ -1487,8 +1506,12 @@ class LaneBridge:
             return
         # Delta (10.2): lifecycle output, including errors, is private to the lane.
         if self._internal_turn:
-            if self._internal_kind == "summary" and ev.kind == "text" and ev.text.strip():
-                self._summary_text = ev.text.strip()
+            if self._internal_kind == "summary":
+                if ev.kind == "error":
+                    self._summary_error = ev.text or "summary turn failed"
+                    self._summary_text = ""
+                elif ev.kind == "text" and ev.text.strip() and not self._summary_error:
+                    self._summary_text = ev.text.strip()
             return
         if self._owner_chat is None:
             return
@@ -1679,12 +1702,17 @@ class LaneBridge:
                 if tokens is not None:
                     self._lane_store.set_ctx_tokens(self.key, tokens)
         if internal:
-            if self._internal_kind == "compact":
+            if self._internal_kind == "compact" and self._internal_compaction_succeeded:
                 self._record_internal_compaction()
             # Delta (10.10): discard the entire internal-command tail, including a Codex
             # task_complete that follows its compacted record, before queued prompts resume.
             if self._transcript and self._transcript.exists():
                 self._tpos = self._transcript.stat().st_size
+            if self._internal_kind == "summary":
+                try:
+                    self._private_boundary.write_text(str(self._tpos), encoding="utf-8")
+                except OSError:
+                    log.exception("could not persist private turn boundary")
             self._internal_turn = False
             self._internal_turn_id = None
             self._internal_compacted_turn_id = None
@@ -2009,6 +2037,12 @@ class LaneBridge:
         self._maybe_reresolve()
         if self._sent_keys and self._transcript is not None:
             self._resume_position()
+            try:
+                boundary = int(self._private_boundary.read_text("utf-8"))
+                if self._tpos < boundary:
+                    self._tpos = boundary
+            except (OSError, ValueError):
+                pass
         self._arm_background()              # everything already in the transcript is history
         self._cleanup_orphan_status()       # remove a bubble orphaned by a prior crash/restart
         self._start_background()

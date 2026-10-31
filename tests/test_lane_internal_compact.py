@@ -456,3 +456,59 @@ def test_codex_compact_waits_for_matching_turn_id(tmp_path):
     bridge.outbound_tick()
     assert done.is_set()
     assert tg.messages == []
+
+
+@pytest.mark.parametrize("agent", ["claude-code", "codex"])
+def test_declined_compaction_finishes_from_transcript_without_recording_compaction(tmp_path, agent):
+    tg, session = Telegram(), Session()
+    state = lane_state_dir("declined", 1, 12, tmp_path)
+    state.mkdir(parents=True)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text("")
+    store = LaneStore(tmp_path / "state.db")
+    key = LaneKey(1, 12)
+    store.upsert(Lane(1, 12, "topic", agent, "sid", "live", False, 1.0, None, 40000))
+    bridge = LaneBridge(tg, key, state / "sent", state / "queue", agent=agent,
+                        session=session, lane_store=store)
+    bridge._transcript = transcript
+    bridge._last_resolve = float("inf")
+    done = bridge.compact_internal()
+    assert session.command_submitted.wait(1)
+    decline = {"type": "system", "subtype": "local_command",
+               "content": "<local-command-stdout>Not enough messages to compact.</local-command-stdout>"}
+    with transcript.open("a") as stream:
+        if agent == "codex":
+            stream.write(json.dumps({"type": "event_msg", "payload": {
+                "type": "task_started", "turn_id": "compact"}}) + "\n")
+        stream.write(json.dumps(decline) + "\n")
+    bridge.outbound_tick()
+    assert done.is_set()
+    assert store.get(key).last_compact is None
+    assert tg.messages == []
+
+
+def test_summary_error_discards_partial_private_text(tmp_path):
+    from agent2telegramtopic.readers import Ev
+
+    bridge = LaneBridge(Telegram(), LaneKey(1, 13), tmp_path / "sent", tmp_path / "queue",
+                        agent="codex", session=Session())
+    bridge._internal_turn = True
+    bridge._internal_kind = "summary"
+    bridge._handle_event(Ev("text", "partial commentary", final=False))
+    bridge._handle_event(Ev("error", "upstream failed", code="upstream"))
+    assert bridge._summary_text == ""
+    assert bridge._summary_error == "upstream failed"
+
+
+def test_internal_timeout_does_not_retire_lane_owned_by_close(tmp_path):
+    retired = []
+    session = Session()
+    session.alive = True
+    bridge = LaneBridge(Telegram(), LaneKey(1, 14), tmp_path / "sent", tmp_path / "queue",
+                        agent="claude-code", session=session, on_parked=retired.append)
+    bridge._closing = True
+    done = bridge.compact_internal()
+    assert session.command_submitted.wait(1)
+    bridge._expire_internal_turn(done)
+    assert done.is_set()
+    assert retired == []

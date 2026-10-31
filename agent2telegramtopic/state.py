@@ -50,6 +50,7 @@ class LaneStore:
 
     def _initialize(self) -> None:
         with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 """CREATE TABLE IF NOT EXISTS lanes (
                     chat_id INTEGER NOT NULL,
@@ -92,6 +93,10 @@ class LaneStore:
                     "status, busy, last_activity, last_compact, ctx_tokens FROM lanes_old"
                 )
                 db.execute("DROP TABLE lanes_old")
+            elif db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lanes_old'").fetchone():
+                # A prior interrupted migration may have committed the rename. Keep
+                # the intact original table rather than silently discarding it.
+                raise sqlite3.DatabaseError("stranded lanes_old table requires recovery")
             # Telegram reaction updates carry no message_thread_id: remember which topic each
             # inbound and outbound message belongs to.
             db.execute(

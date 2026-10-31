@@ -621,13 +621,31 @@ class Multiplexer:
         acknowledge_busy = False
         start_unmanaged = False
         submit = False
+        close_parked = False
         with self._lane_lock:
             was_started = key in self._started_lanes
-            starting = getattr(lane, "_starting", False)
+            if key in self._lanes and self._lanes.get(key) is not lane:
+                was_started = False
+                if self.lane_store is not None:
+                    self.lane_store.set_status(key, "waiting")
+                    self.lane_store.set_busy(key, False)
+                acknowledge_waiting = False
+                submit = False
+                # The reservation belongs to the replacement bridge's durable inbox.
+                starting = True
+            else:
+                starting = getattr(lane, "_starting", False)
             row = self.lane_store.get(key) if self.lane_store is not None else None
             status = row.status if row is not None else "live"
             closing = getattr(lane, "_closing", False)
-            if starting:
+            message_text = str((upd.get("message") or upd.get("edited_message") or {}).get("text", "")).strip()
+            is_close = message_text.split(maxsplit=1)[0].split("@", 1)[0] == "/close" if message_text else False
+            if (self.lane_store is not None and is_close and not was_started and not closing
+                    and status in {"parked", "waiting", "archived"}):
+                self.lane_store.set_status(key, "archived")
+                self.lane_store.set_busy(key, False)
+                close_parked = True
+            elif starting:
                 # The durable record will be picked up by _start_lane's final replay.
                 # Keep the live status and avoid a queued notice during activation.
                 pass
@@ -647,6 +665,11 @@ class Multiplexer:
                 self.lane_store.set_busy(key, False)
                 acknowledge_waiting = self._live_count() >= self.max_live
             submit = was_started and not internal and not closing
+        if close_parked:
+            inbox.done(record_id)
+            callback = getattr(lane, "_on_close", None)
+            if callable(callback):
+                callback(key)
         if start_unmanaged:
             self._start_lane(key)
         if acknowledge_busy:
