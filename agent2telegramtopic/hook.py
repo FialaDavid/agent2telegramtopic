@@ -16,7 +16,10 @@ def main(argv=None) -> int:
         parser = argparse.ArgumentParser()
         parser.add_argument("--bot", required=True)
         parser.add_argument("--lanes-root")
+        parser.add_argument("--config")
         args = parser.parse_args(argv)
+        if args.config:
+            config.set_config_path(args.config)
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
             payload = None

@@ -58,17 +58,56 @@ _FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id
                "idle_compact_minutes", "compact_min_tokens"}
 
 
+#: Names the config file of one bridge instance (the ``--config`` option sets it for this process
+#: and, being an environment variable, for everything the process starts, agent sessions included).
+CONFIG_ENV = "AGENT2TELEGRAMTOPIC_CONFIG"
+
+
 def _home(home: Path | None = None) -> Path:
     return home if home is not None else Path.home()
 
 
-def app_dir(home: Path | None = None) -> Path:
-    """Everything the bridge owns lives under this one directory."""
-    return _home(home) / APP_DIRNAME
+def set_config_path(path: str | Path) -> Path:
+    """Select the bridge instance this process and its children work on."""
+    chosen = Path(path).expanduser().absolute()
+    os.environ[CONFIG_ENV] = str(chosen)
+    return chosen
+
+
+def pop_config_arg(argv: list[str]) -> list[str]:
+    """Apply and remove ``--config PATH`` / ``--config=PATH`` from argv; returns the rest."""
+    rest = []
+    items = iter(argv)
+    for item in items:
+        if item == "--config":
+            value = next(items, "")
+            if not value or value.startswith("--"):
+                raise ValueError("--config needs a path")
+            set_config_path(value)
+        elif item.startswith("--config="):
+            set_config_path(item.split("=", 1)[1])
+        else:
+            rest.append(item)
+    return rest
+
+
+def _default_config_file(home: Path | None = None) -> Path:
+    return _home(home) / APP_DIRNAME / "config.json"
 
 
 def config_file(home: Path | None = None) -> Path:
-    return app_dir(home) / "config.json"
+    chosen = os.environ.get(CONFIG_ENV)
+    return Path(chosen).expanduser().absolute() if chosen else _default_config_file(home)
+
+
+def is_default_instance(home: Path | None = None) -> bool:
+    """True for the install in ~/.agent2telegramtopic, False for one chosen with ``--config``."""
+    return config_file(home).resolve() == _default_config_file(home).resolve()
+
+
+def app_dir(home: Path | None = None) -> Path:
+    """Everything one bridge instance owns lives under this one directory (the config file's parent)."""
+    return config_file(home).parent
 
 
 def state_dir(home: Path | None = None) -> Path:
@@ -199,11 +238,14 @@ def cli_command(python: str) -> str:
     return f"PYTHONPATH={shlex.quote(str(repo_root))} {shlex.quote(python)} -m agent2telegramtopic"
 
 
-def write_hooks_settings(path: Path, python: str, bot_name: str, lane_root: Path | None = None) -> None:
+def write_hooks_settings(path: Path, python: str, bot_name: str, lane_root: Path | None = None,
+                         home: Path | None = None) -> None:
     repo_root = Path(agent2telegramtopic.__file__).resolve().parent.parent
     command = f"PYTHONPATH={shlex.quote(str(repo_root))} {shlex.quote(python)} -m agent2telegramtopic.hook --bot {shlex.quote(bot_name)}"
     if lane_root is not None:
         command += f" --lanes-root {shlex.quote(str(lane_root))}"
+    if not is_default_instance(home):
+        command += f" --config {shlex.quote(str(config_file(home)))}"
     # The statusLine records rate limits for /usage; it replaces the user's own statusLine in bridge sessions.
     limits_file = path.with_name(f"{bot_name}.claude_rate_limits.json")
     settings = {

@@ -6,18 +6,23 @@
   3. Authorize yourself: send the bot a message in its private chat, the wizard reads your id.
   4. Optionally add an ElevenLabs key (voice notes in and out).
   5. Write ~/.agent2telegramtopic/config.json (0600) and start the background service.
+
+``setup --config PATH`` creates a further bot next to the first one: its config, state and service
+live in PATH's directory and under its own service name.
 """
 from __future__ import annotations
 
 import getpass
 import os
+import shlex
 import shutil
 import sys
 import time
 from pathlib import Path
 
 from . import service
-from .config import config_file, hooks_settings_file, lanes_root, save_config, write_hooks_settings
+from .config import (config_file, hooks_settings_file, is_default_instance, lanes_root, pop_config_arg, save_config,
+                     write_hooks_settings)
 from .skills import install_skill
 from .telegram import TelegramClient, TelegramError
 
@@ -157,26 +162,31 @@ def run(home: Path | None = None, client_factory=TelegramClient, platform: str =
     if agent == "claude-code":
         # Claude Code takes its Stop/SessionStart hooks from a settings file passed with --settings
         # at every launch; the bridge rewrites it on start. Nothing global is edited.
-        write_hooks_settings(hooks_settings_file(bot, home), sys.executable, bot, lanes_root(bot, home))
+        write_hooks_settings(hooks_settings_file(bot, home), sys.executable, bot, lanes_root(bot, home), home)
         print("  ✓ Claude Code hooks are passed per session with --settings; ~/.claude is not modified.")
     else:
         print("  ✓ Codex needs no hook; turn boundaries come from its rollout log.")
     print(f"  ✓ {install_skill(agent, home)}")
     if _yes("\nInstall and start the background service now?", default_yes=True):
         try:
-            where = service.install(platform, home=home, path=_service_path(agent))
+            where = service.install(platform, home=home, path=_service_path(agent), bot=bot)
             print(f"  ✓ service installed: {where}")
-            print(f"  Logs: {service.log_path(home) if platform == 'darwin' else 'journalctl --user -u ' + service.UNIT}")
+            print(f"  Logs: {service.log_path(home) if platform == 'darwin' else 'journalctl --user -u ' + service.unit_name(home, bot)}")
             if platform != "darwin":
                 print("  To keep it running after you log out:  loginctl enable-linger $USER")
         except (OSError, RuntimeError) as exc:
             print(f"  ✗ could not install the service: {exc}")
-            print("    Run the bridge by hand instead:  python3 -m agent2telegramtopic run")
+            print(f"    Run the bridge by hand instead:  {_run_command(home)}")
             return 1
     else:
-        print("Run the bridge by hand:  python3 -m agent2telegramtopic run")
+        print(f"Run the bridge by hand:  {_run_command(home)}")
     print(f"\nAll set. Open the private chat with @{bot}, create a topic and write in it.")
     return 0
+
+
+def _run_command(home: Path | None) -> str:
+    extra = "" if is_default_instance(home) else f" --config {shlex.quote(str(config_file(home)))}"
+    return f"python3 -m agent2telegramtopic run{extra}"
 
 
 def _service_path(agent: str) -> str:
@@ -188,6 +198,7 @@ def _service_path(agent: str) -> str:
 
 def main(argv=None) -> int:
     try:
+        pop_config_arg(list(sys.argv[1:] if argv is None else argv))
         return run()
     except (KeyboardInterrupt, EOFError):
         print("\nAborted.")

@@ -1,7 +1,9 @@
-"""``python3 -m agent2telegramtopic uninstall``: stop the service, remove config, state and launcher."""
+"""``python3 -m agent2telegramtopic uninstall [--config PATH]``: stop the service, remove config, state and
+launcher. With --config only that bot goes; the launcher and skill stay while another bot is installed."""
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -9,7 +11,7 @@ import sys
 from pathlib import Path
 
 from . import service
-from .config import app_dir
+from .config import app_dir, config_file, is_default_instance, pop_config_arg
 from .skills import remove_skills
 
 
@@ -35,11 +37,29 @@ def _remove_launcher(home: Path) -> None:
             pass
 
 
+def _bot_username(home: Path | None) -> str | None:
+    try:
+        return json.loads(config_file(home).read_text("utf-8")).get("bot_username")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _other_instances(base: Path) -> bool:
+    """True while some bot's service file remains (the launcher and skill are shared by all of them)."""
+    return bool(list((base / "Library/LaunchAgents").glob("com.agent2telegramtopic.bridge*.plist"))
+                or list((base / ".config/systemd/user").glob("agent2telegramtopic*.service")))
+
+
 def main(argv=None, home: Path | None = None, platform: str = sys.platform) -> int:
     parser = argparse.ArgumentParser(prog="agent2telegramtopic uninstall")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    args = parser.parse_args(argv)
+    parser.add_argument("--config", help="remove the bot with this config file instead of the default install")
+    args = parser.parse_args(pop_config_arg(list(sys.argv[1:] if argv is None else argv)))
     root = app_dir(home)
+    base = home or Path.home()
+    if root == base or root in base.parents:
+        print(f"Refusing to delete {root}: it contains your home directory. Point --config at a file in its own directory.")
+        return 2
     if not args.yes:
         print(f"This stops the bridge and deletes {root} (config with your bot token, state and the")
         print("working directories of all topics), the background service and the installed launcher.")
@@ -48,7 +68,10 @@ def main(argv=None, home: Path | None = None, platform: str = sys.platform) -> i
             return 0
     print("Uninstalling Agent2TelegramTopic…")
     try:
-        if service.remove(platform, home=home):
+        bot = _bot_username(home)
+        if not is_default_instance(home) and not bot:
+            print("  ! no bot_username in the config, so this bot's service cannot be identified; not touched")
+        elif service.remove(platform, home=home, bot=bot):
             print("  ✓ background service stopped and removed")
     except OSError as exc:
         print(f"  ! could not remove the service: {exc}")
@@ -56,13 +79,15 @@ def main(argv=None, home: Path | None = None, platform: str = sys.platform) -> i
     if root.exists():
         shutil.rmtree(root)
         print(f"  ✓ removed {root}")
-    base = home or Path.home()
-    for removed in remove_skills(base):
-        print(f"  ✓ removed {removed}")
-    _remove_launcher(base)
-    source = base / ".agent2telegramtopic-src"
-    if source.is_dir() and not source.is_symlink() and (source / "agent2telegramtopic").is_dir():
-        shutil.rmtree(source)
-        print(f"  ✓ removed {source}")
+    if _other_instances(base):
+        print("  · another bot is still installed: the launcher, the skill and the source stay")
+    else:
+        for removed in remove_skills(base):
+            print(f"  ✓ removed {removed}")
+        _remove_launcher(base)
+        source = base / ".agent2telegramtopic-src"
+        if source.is_dir() and not source.is_symlink() and (source / "agent2telegramtopic").is_dir():
+            shutil.rmtree(source)
+            print(f"  ✓ removed {source}")
     print("Done. Telegram side: the bot itself still exists; delete it with @BotFather if you no longer need it.")
     return 0

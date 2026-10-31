@@ -11,9 +11,9 @@ import time
 from pathlib import Path
 
 from agent2telegramtopic import redaction
-from agent2telegramtopic.config import (Config, build_config, hooks_settings_file, lane_path,
-                                 lane_state_file, load_config, lanes_root, state_db_path,
-                                 write_hooks_settings)
+from agent2telegramtopic.config import (CONFIG_ENV, Config, build_config, config_file, hooks_settings_file,
+                                 is_default_instance, lane_path, lane_state_file, load_config,
+                                 lanes_root, state_db_path, write_hooks_settings)
 from agent2telegramtopic.lane import BOT_COMMANDS, LaneBridge
 from agent2telegramtopic.multiplexer import Multiplexer
 from agent2telegramtopic.lock import AlreadyRunning, lock_file, single_instance_lock
@@ -38,6 +38,13 @@ def _expected_agent_commands(config: Config) -> list[str]:
             seen.add(name)
             expected.append(name)
     return expected
+
+
+def _lane_command(argv: list[str]) -> list[str]:
+    """Start the agent so that CLI calls it makes (topic-edit) find this bot's config, not the default."""
+    if is_default_instance():
+        return argv
+    return ["env", f"{CONFIG_ENV}={config_file()}", *argv]
 
 
 def build_app(config: Config, token: str, root: str) -> Multiplexer:
@@ -126,7 +133,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
             return subprocess.run(["tmux", "has-session", "-t", tmux_name],
                                   capture_output=True).returncode == 0
         def activate_session():
-            bridge._session = TmuxSession(argv, cwd=cwd,
+            bridge._session = TmuxSession(_lane_command(argv), cwd=cwd,
                 name=tmux_name, origin_prefix="[TG] ", signal_file=signal_file,
                 expected_agent_commands=_expected_agent_commands(config))
         bridge._session_alive = session_alive

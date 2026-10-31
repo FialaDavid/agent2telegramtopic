@@ -1,7 +1,12 @@
 """Command dispatcher: ``python3 -m agent2telegramtopic [run|setup|uninstall|service]``."""
 import sys
 
+from agent2telegramtopic import config
+
 USAGE = """usage: agent2telegramtopic <command>
+
+Every command that works on an install accepts --config PATH (default ~/.agent2telegramtopic/config.json;
+env AGENT2TELEGRAMTOPIC_CONFIG is the fallback) to select one of several bots run side by side.
 
 commands:
   setup       interactive setup wizard (bot token, Telegram checks, background service)
@@ -14,6 +19,11 @@ commands:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        argv = config.pop_config_arg(argv)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
     command = argv.pop(0) if argv and (not argv[0].startswith("-") or argv[0] in ("-h", "--help")) else "run"
     if command not in ("run", "setup", "uninstall", "topic-edit", "statusline"):
         sys.stderr.write(USAGE)

@@ -152,6 +152,38 @@ yourself rather than pasting the token into an agent chat.
 - Every topic gets its own working directory under `~/.agent2telegramtopic/topics/<bot>/<chat>/<topic>`
   (override the root with `workdir`).
 
+## Several bots
+
+One machine can run several bots side by side, each with its own token, allowed users, state and
+service. Give every extra bot its own config file in its own directory:
+
+```bash
+agent2telegramtopic setup --config ~/.agent2telegramtopic-work/config.json
+agent2telegramtopic run --config ~/.agent2telegramtopic-work/config.json   # what the service runs
+agent2telegramtopic uninstall --config ~/.agent2telegramtopic-work/config.json
+```
+
+Every command that works on an install accepts `--config PATH`; without it the environment
+variable `AGENT2TELEGRAMTOPIC_CONFIG` is used, and without that `~/.agent2telegramtopic/config.json`.
+The **instance directory is the config file's directory**: `state/`, `topics/`, `logs/` and `tmux/`
+sit in it exactly as in `~/.agent2telegramtopic`. The default install is unchanged (same paths,
+launchd label `com.agent2telegramtopic.bridge`, unit `agent2telegramtopic.service`).
+
+For an instance chosen with `--config`:
+
+- macOS: label and file `com.agent2telegramtopic.bridge.<bot_username>` (plist in
+  `~/Library/LaunchAgents/`); Linux: unit `agent2telegramtopic-<bot_username>.service`. The service
+  runs `... run --config <absolute path>`.
+- The Claude Code hooks settings carry `--config <path>`, and the agent sessions start with
+  `AGENT2TELEGRAMTOPIC_CONFIG=<path>`, so `topic-edit` and other calls made by the agent reach the
+  right bot.
+- `uninstall --config PATH` removes only that bot (its service and its directory). The
+  `agent2telegramtopic` launcher, the `telegram-topic` skill and `~/.agent2telegramtopic-src` are
+  shared and are removed only when no other bot's service file remains in
+  `~/Library/LaunchAgents/` or `~/.config/systemd/user/`. It refuses a config file placed directly
+  in your home directory, because that directory would be deleted.
+- Use a different bot token per instance; two bridges polling the same bot would fight over updates.
+
 ## Uninstall
 
 ```bash
