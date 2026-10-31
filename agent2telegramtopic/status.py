@@ -39,6 +39,19 @@ def _seconds(value) -> int | None:
     return int(value) if value is not None else None
 
 
+def _ctx_windows(path: Path) -> dict[str, int]:
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {cwd: value["ctx_window"] for cwd, value in data.items()
+            if isinstance(cwd, str) and isinstance(value, dict)
+            and isinstance(value.get("ctx_window"), int)
+            and not isinstance(value.get("ctx_window"), bool)}
+
+
 class StatusWriter:
     def __init__(self, path: Path, config, config_path: Path, lane_store, root: str, *,
                  heartbeat_seconds: int = HEARTBEAT_SECONDS, sessions=tmux_sessions, clock=time.time):
@@ -70,6 +83,9 @@ class StatusWriter:
 
     def snapshot(self) -> dict:
         titles = self.lane_store.topic_titles()
+        ctx_windows = (_ctx_windows(self.path.with_name(
+            f"{self.config.bot_name}.claude_ctx.json"))
+            if self.config.agent_kind == "claude-code" else {})
         alive = self._sessions()
         lanes = []
         for lane in self.lane_store.list_all():
@@ -89,8 +105,8 @@ class StatusWriter:
                 "last_activity": _seconds(lane.last_activity),
                 "last_compact": self._last_compact(lane),
                 "ctx_tokens": lane.ctx_tokens,
-                # No source a2tt already reads reports the window size; never guessed.
-                "ctx_window": None,
+                "ctx_window": ctx_windows.get(str(lane_path(
+                    self.root, lane.chat_id, lane.thread_id).resolve())),
             })
         return {
             "schema": SCHEMA,

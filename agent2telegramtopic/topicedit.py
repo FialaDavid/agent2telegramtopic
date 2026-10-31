@@ -9,7 +9,9 @@ import re
 import sys
 from pathlib import Path
 
-from .config import bot_token, load_config
+from .config import bot_token, load_config, state_db_path
+from .routing import LaneKey
+from .state import LaneStore
 from .telegram import TelegramClient, TelegramError
 
 _VS16 = "️"
@@ -37,8 +39,9 @@ def main(argv=None, *, home: Path | None = None, cwd: Path | None = None, client
         return 1
     chat, thread = topic
     try:
+        raw_config = load_config(home)
         if client is None:
-            client = TelegramClient(bot_token(load_config(home)))
+            client = TelegramClient(bot_token(raw_config))
         stickers = client._call("getForumTopicIconStickers", timeout=15)
         icons = {s["emoji"].replace(_VS16, ""): s["custom_emoji_id"] for s in stickers}
         icon = icons.get(emoji.replace(_VS16, ""))
@@ -51,6 +54,8 @@ def main(argv=None, *, home: Path | None = None, cwd: Path | None = None, client
         except TelegramError as exc:
             if "TOPIC_NOT_MODIFIED" not in str(exc):
                 raise
+        store = LaneStore(state_db_path(raw_config["bot_username"].strip(), home))
+        store.set_topic_title(LaneKey(chat, thread), name)
     except (TelegramError, ValueError) as exc:
         print(f"topic-edit failed: {exc}", file=sys.stderr)
         return 1

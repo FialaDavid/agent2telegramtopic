@@ -76,6 +76,25 @@ def test_unknown_values_are_null_not_missing(instance, tmp_path):
     assert entry["alive"] is False and entry["status"] == "parked"
 
 
+def test_context_window_is_matched_by_resolved_cwd_and_codex_stays_null(instance, tmp_path):
+    store = LaneStore(":memory:")
+    store.upsert(lane())
+    store.upsert(lane(thread=8))
+    writer = make_writer(instance, tmp_path, store)
+    sidecar = writer.path.with_name("StatusBot.claude_ctx.json")
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(json.dumps({str((tmp_path / "lanes/123/7").resolve()):
+                                   {"ctx_window": 200000, "at": 1},
+                                   str(tmp_path / "other"): {"ctx_window": 123, "at": 1}}))
+    writer.write()
+    entries = read(writer)["lanes"]
+    assert entries[0]["ctx_window"] == 200000
+    assert entries[1]["ctx_window"] is None
+    writer.config = Config("StatusBot", "codex", frozenset({8}))
+    writer.write()
+    assert read(writer)["lanes"][0]["ctx_window"] is None
+
+
 def test_last_compact_is_the_later_of_bridge_record_and_hook_marker(instance, tmp_path):
     store = LaneStore(":memory:")
     store.upsert(lane(last_compact=5000.0))

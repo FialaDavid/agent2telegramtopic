@@ -148,6 +148,34 @@ def test_topic_edit_renames_the_topic_of_the_current_directory(tmp_path, capsys)
     assert method == "editForumTopic"
     assert (params["chat_id"], params["message_thread_id"], params["name"],
             params["icon_custom_emoji_id"]) == (555, 77, "Garden", "111")
+    store = LaneStore(tmp_path / ".agent2telegramtopic/state/b.db")
+    assert store.topic_titles()[LaneKey(555, 77)] == "Garden"
+
+
+def test_topic_edit_records_title_when_telegram_says_not_modified(tmp_path, capsys):
+    class NotModified:
+        def _call(self, method, params=None, **kwargs):
+            if method == "getForumTopicIconStickers":
+                return STICKERS
+            from agent2telegramtopic.telegram import TelegramError
+            raise TelegramError(400, "TOPIC_NOT_MODIFIED")
+    save_config({"agent": "codex", "token": TOKEN, "allowed_user_ids": [1], "bot_username": "b"}, tmp_path)
+    assert topicedit.main(["Same", "💡"], home=tmp_path, cwd=topic_dir(tmp_path), client=NotModified()) == 0
+    store = LaneStore(tmp_path / ".agent2telegramtopic/state/b.db")
+    assert store.topic_titles()[LaneKey(555, 77)] == "Same"
+
+
+def test_failed_topic_edit_does_not_record_title(tmp_path):
+    class Failed:
+        def _call(self, method, params=None, **kwargs):
+            if method == "getForumTopicIconStickers":
+                return STICKERS
+            from agent2telegramtopic.telegram import TelegramError
+            raise TelegramError(400, "FORUM_TOPIC_CLOSED")
+    save_config({"agent": "codex", "token": TOKEN, "allowed_user_ids": [1], "bot_username": "b"}, tmp_path)
+    assert topicedit.main(["Nope", "💡"], home=tmp_path, cwd=topic_dir(tmp_path), client=Failed()) == 1
+    store = LaneStore(tmp_path / ".agent2telegramtopic/state/b.db")
+    assert store.topic_titles() == {}
 
 
 def test_topic_edit_accepts_emoji_with_variation_selector(tmp_path):
@@ -223,6 +251,15 @@ def test_statusline_records_rate_limits_and_prints_a_status(monkeypatch, tmp_pat
     saved = json.loads(out.read_text())
     assert saved["five_hour"]["used_percentage"] == 19 and saved["seven_day"]["used_percentage"] == 16
     assert saved["captured_at"] > 0
+
+
+def test_statusline_records_context_window_by_resolved_cwd(monkeypatch, tmp_path):
+    out = tmp_path / "bot.claude_rate_limits.json"
+    payload = {"workspace": {"current_dir": str(tmp_path / "work" / "..")},
+               "context_window": {"context_window_size": 200000}}
+    assert run_statusline(monkeypatch, json.dumps(payload), out) == 0
+    saved = json.loads((tmp_path / "bot.claude_ctx.json").read_text())
+    assert saved[str(tmp_path.resolve())] == {"ctx_window": 200000, "at": saved[str(tmp_path.resolve())]["at"]}
 
 
 @pytest.mark.parametrize("stdin", ["", "{", "[]", "null", json.dumps({"model": 3, "rate_limits": "x"}),

@@ -44,12 +44,13 @@ Rules:
 - Timestamps are integer unix seconds. Unknown values are `null`; keys are never omitted.
 - `status` is `live`, `parked`, or `waiting` (parked with inbound messages waiting for a slot).
 - `alive`: the lane's tmux session exists on the instance's tmux server at write time.
-- `title`: the topic name if the bridge has seen it in a `forum_topic_created` or
-  `forum_topic_edited` service message (including the bridge's own `topic-edit`); else `null`.
+- `title`: the name from `topic_titles`, recorded from topic service messages or immediately after a
+  successful bridge or topic skill rename; else `null`.
   Topics renamed or created before the bridge first saw them stay `null` until their next rename.
 - `last_compact`: the later of the bridge-recorded compaction and the Claude compact hook marker;
   `null` if never.
-- `ctx_window` is currently always `null`: no source the bridge already reads reports it.
+- `ctx_window`: Claude lanes use the latest `context_window.context_window_size` from statusLine,
+  matched by resolved cwd; Codex lanes and unmatched or unavailable values are `null`.
   Compute a percentage only when both `ctx_tokens` and `ctx_window` are non-null.
 - Staleness: treat the bridge as hung or stopped when
   `now - updated_at > 3 * heartbeat_seconds + 30`.
