@@ -189,7 +189,7 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 | `workdir` | `""` | Root for topic working directories (empty = under `~/.agent2telegramtopic/topics`) |
 | `file_marker` | `[tg-file]` | Line prefix the agent uses to send a file |
 | `outbox_dirs` | `[]` | Extra folders the agent may send files from |
-| `background_progress` | `false` | Also show sub-agent / background-task progress |
+| `background_progress` | `true` | Also show sub-agent / background-task progress |
 | `inbound_sender_label` | `false` | Prefix messages with sender and chat |
 
 Everything the bridge owns lives under `~/.agent2telegramtopic/`: `config.json`, `state/`

@@ -81,7 +81,7 @@ INBOUND_MAX_ATTEMPTS = 5
 INBOUND_RETRY_INTERVAL = 30.0
 MAX_INBOUND_PROMPT_CHARS = 12_000
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
-#: Background progress (opt-in, Claude Code): how often the sub-agent watcher polls, and how old a
+#: Background progress (on by default, Claude Code): how often the sub-agent watcher polls, and how old a
 #: transcript record may be to still count as live work. Records older than this — or written
 #: before the bridge started — are history being replayed, never shown as a status bubble.
 BACKGROUND_TICK = 2.0
@@ -1239,7 +1239,7 @@ class LaneBridge:
             self._report_agent_error(ev)
             return
         if ev.kind == "tool" and not self._turn_from_tg and self._rec_live:
-            # Live tool call of a turn NOT started from Telegram (opt-in background progress).
+            # Live tool call of a turn NOT started from Telegram (background progress).
             if ev.key and ev.key not in self._seen_tools:
                 self._seen_tools.add(ev.key)
                 self._status_push(ev.text, background=True)
@@ -1469,7 +1469,7 @@ class LaneBridge:
             return None
         return answer or None
 
-    # ---- background progress (opt-in, Claude Code) ------------------------------------
+    # ---- background progress (on by default, Claude Code) ------------------------------------
     # Ported from agent2telegram attach.py:_background_enabled (MIT).
     def _background_enabled(self) -> bool:
         cfg = getattr(self, "cfg", None)

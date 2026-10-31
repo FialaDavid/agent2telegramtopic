@@ -1,4 +1,4 @@
-"""Background progress (opt-in): work that runs outside a Telegram turn is visible in the chat.
+"""Background progress (on by default): work that runs outside a Telegram turn is visible in the chat.
 
 Port of agent2telegram tests/test_background_progress.py, adapted to LaneBridge/LaneKey: every
 send, edit and delete is asserted to carry this lane's topic (message_thread_id).
@@ -403,9 +403,9 @@ class TopicTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
-    def test_default_off_and_validated(self):
+    def test_default_on_and_validated(self):
         c = Config("test-bot", "claude-code", frozenset({7}))
-        self.assertFalse(c.background_progress)
+        self.assertTrue(c.background_progress)
         self.assertRaises(ValueError, Config, "test-bot", "claude-code", frozenset({7}),
                           background_progress="yes")
         self.assertTrue(Config("test-bot", "claude-code", frozenset({7}),

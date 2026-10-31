@@ -24,7 +24,7 @@ def test_config_defaults():
     assert config.tts_speed == 1.25
     assert config.file_marker == "[tg-file]"
     assert config.outbox_dirs == []
-    assert config.background_progress is False
+    assert config.background_progress is True
     assert config.inbound_sender_label is False
 
 
@@ -178,6 +178,12 @@ def test_bot_config_file_can_enable_background_progress_and_sender_label(tmp_pat
     save_config(minimal(background_progress=True, inbound_sender_label=True), tmp_path)
     cfg = build_config(load_config(tmp_path))
     assert cfg.background_progress is True and cfg.inbound_sender_label is True
+
+
+def test_bot_config_file_can_disable_background_progress(tmp_path):
+    save_config(minimal(background_progress=False), tmp_path)
+    cfg = build_config(load_config(tmp_path))
+    assert cfg.background_progress is False
 
 
 def test_shipped_example_config_is_valid_apart_from_its_placeholders():

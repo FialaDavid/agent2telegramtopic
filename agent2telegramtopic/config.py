@@ -27,8 +27,8 @@ class Config:
     outbox_dirs: list[str] = field(default_factory=list)
     # Claude Code: show work that runs outside a Telegram turn — running sub-agents (one message
     # edited in place) and tool calls of turns not started from Telegram (e.g. a background-task
-    # notification). Off by default: it adds messages to the owner's chat.
-    background_progress: bool = False
+    # notification). On by default; set false to keep the chat quiet.
+    background_progress: bool = True
     inbound_sender_label: bool = False  # display sender/chat after origin_prefix
 
     def __post_init__(self) -> None:
