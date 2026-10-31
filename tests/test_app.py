@@ -520,3 +520,30 @@ def test_main_rejects_unknown_arguments():
     with pytest.raises(SystemExit) as error:
         app_module.main(["--bot", "ExampleBot"])
     assert error.value.code == 2
+
+
+def test_main_logs_one_startup_line_naming_bot_agent_config_and_lane_root(monkeypatch, tmp_path, caplog):
+    caplog.set_level("INFO")
+
+    class FakeClient:
+        def get_me(self):
+            return {"has_topics_enabled": True}
+
+        def set_my_commands(self, commands):
+            del commands
+
+    class FakeApp:
+        client = FakeClient()
+
+        def run_forever(self):
+            pass
+    monkeypatch.setattr(app_module.Path, "home", classmethod(lambda cls: tmp_path))
+    write_config(tmp_path, workdir=str(tmp_path / "lanes"))
+    monkeypatch.setattr(app_module, "build_app", lambda config, token, cwd: FakeApp())
+    assert app_module.main([]) == 0
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("started ")]
+    assert len(lines) == 1
+    for part in ("@ExampleBot", "claude-code", str(tmp_path / ".agent2telegramtopic/config.json"),
+                 str((tmp_path / "lanes").resolve())):
+        assert part in lines[0]
+    assert FAKE_TOKEN not in caplog.text

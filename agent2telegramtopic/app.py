@@ -248,6 +248,8 @@ def main(argv=None) -> int:
                 log.warning("Bot topics are not enabled (Threaded Mode); starting anyway, "
                             "the first message will tell the user how to turn them on")
                 app.topics_enabled = False
+            log.info("started @%s (agent %s, config %s, lanes under %s)",
+                     config.bot_name, config.agent_kind, config_file(), root)
             app.run_forever()
             return 0
     except AlreadyRunning:
