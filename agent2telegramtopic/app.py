@@ -220,7 +220,13 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     bridge.stop()
                     bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
                     return
-                lane_store.set_status(key, "archived")
+                try:
+                    inbox = bridge._ensure_inbox()
+                    pending = inbox is not None and bool(inbox.pending())
+                except Exception:
+                    pending = False
+                # A message sent while closing must still be answered: resume instead of archiving.
+                lane_store.set_status(key, "waiting" if pending else "archived")
                 lane_store.set_busy(key, False)
                 mux._retire_parked_lane(key, bridge)
                 bridge.stop()

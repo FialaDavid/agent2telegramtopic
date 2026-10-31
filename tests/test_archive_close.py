@@ -245,3 +245,13 @@ def test_archived_lanes_do_not_consume_live_slots(tmp_path):
     from agent2telegramtopic.multiplexer import Multiplexer
     mux = Multiplexer(Client(), {8}, tmp_path / "bot", lambda key: None, lane_store=store, max_live=1)
     assert mux._live_count() == 0
+
+
+def test_message_sent_while_closing_is_still_answered(world, tmp_path, monkeypatch):
+    mux, bridge, client = world("claude-code")
+    inbox = bridge._ensure_inbox()
+    monkeypatch.setattr(inbox, "pending", lambda: ["queued while closing"])
+    close_and_wait(bridge, client, mux)
+    (record,) = records(tmp_path)
+    assert record["summary"] == SUMMARY
+    assert mux.lane_store.get(KEY).status == "waiting"
