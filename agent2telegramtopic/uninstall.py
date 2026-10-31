@@ -16,11 +16,15 @@ from .skills import remove_skills
 
 
 def _stop_tmux(home: Path | None) -> None:
-    """Kill the bridge's private tmux server (and so every agent session it started)."""
-    socket_dir = app_dir(home) / "tmux"
-    if socket_dir.is_dir() and shutil.which("tmux"):
-        subprocess.run(["tmux", "kill-server"], env={**os.environ, "TMUX_TMPDIR": str(socket_dir)},
-                       capture_output=True)
+    """Kill the bridge's private tmux server (and so every agent session it started), nothing else.
+
+    The server is addressed by its socket (-S): a plain `tmux kill-server` would go to the server named
+    by $TMUX when uninstall runs inside some tmux session, and to the shared default server if the
+    private directory is missing.
+    """
+    socket = app_dir(home) / "tmux" / f"tmux-{os.getuid()}" / "default"
+    if socket.exists() and shutil.which("tmux"):
+        subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True)
 
 
 def _remove_launcher(home: Path) -> None:

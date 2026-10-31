@@ -148,7 +148,9 @@ yourself rather than pasting the token into an agent chat.
 - The service runs `python3 -m agent2telegramtopic run`. Logs: `~/.agent2telegramtopic/logs/bridge.log`
   (macOS) or `journalctl --user -u agent2telegramtopic` (Linux).
 - Sessions live in a **private tmux server** so they never mix with your own tmux. To look at
-  them: `TMUX_TMPDIR=~/.agent2telegramtopic/tmux tmux ls` (then `tmux attach -t "<name>"`).
+  them: `TMUX_TMPDIR=~/.agent2telegramtopic/tmux tmux ls` (then `tmux attach -t "<name>"`). The bridge
+  creates that directory itself at start; tmux would otherwise ignore a missing `TMUX_TMPDIR` and
+  fall back to the shared default server.
 - Every topic gets its own working directory under `~/.agent2telegramtopic/topics/<bot>/<chat>/<topic>`
   (override the root with `workdir`).
 
@@ -192,7 +194,9 @@ agent2telegramtopic uninstall           # asks first; add --yes to skip the ques
 curl -fsSL https://raw.githubusercontent.com/FialaDavid/agent2telegramtopic/main/uninstall.sh | bash
 ```
 
-This stops and removes the launchd/systemd service, stops the bridge's tmux server, and deletes
+This stops and removes the launchd/systemd service, ends every agent session by killing the bridge's
+private tmux server (addressed by its own socket under `~/.agent2telegramtopic/tmux`; no other tmux
+server is touched, even if you run it inside tmux), and deletes
 `~/.agent2telegramtopic` (config with your token, state **and the topics' working directories**),
 `~/.agent2telegramtopic-src` and the launcher. Delete the bot itself with @BotFather if you no
 longer need it.

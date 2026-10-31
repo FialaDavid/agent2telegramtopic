@@ -5,13 +5,14 @@ import argparse
 from dataclasses import replace
 import logging
 import json
+import os
 import sys
 import threading
 import time
 from pathlib import Path
 
 from agent2telegramtopic import redaction
-from agent2telegramtopic.config import (CONFIG_ENV, Config, build_config, config_file, hooks_settings_file,
+from agent2telegramtopic.config import (CONFIG_ENV, Config, app_dir, build_config, config_file, hooks_settings_file,
                                  is_default_instance, lane_path, lane_state_file, load_config,
                                  lanes_root, state_db_path, write_hooks_settings)
 from agent2telegramtopic.lane import BOT_COMMANDS, LaneBridge
@@ -38,6 +39,14 @@ def _expected_agent_commands(config: Config) -> list[str]:
             seen.add(name)
             expected.append(name)
     return expected
+
+
+def use_private_tmux() -> None:
+    """Run agent sessions in this instance's own tmux server. tmux ignores a TMUX_TMPDIR that does not
+    exist and silently uses the shared /tmp server, so the directory is created here."""
+    tmux_dir = app_dir() / "tmux"
+    tmux_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["TMUX_TMPDIR"] = str(tmux_dir)
 
 
 def _lane_command(argv: list[str]) -> list[str]:
@@ -214,6 +223,7 @@ def main(argv=None) -> int:
             log.error("%s", exc)
             return 2
         config = build_config(raw)
+        use_private_tmux()
         token = raw["token"]
         bot = config.bot_name
         with single_instance_lock(lock_file(bot)):
