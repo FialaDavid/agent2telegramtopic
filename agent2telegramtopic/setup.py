@@ -23,10 +23,10 @@ from .telegram import TelegramClient, TelegramError
 
 AGENTS = {"claude-code": ("Claude Code", "claude"), "codex": ("Codex", "codex")}
 TOPICS_HELP = (
-    "  ✗ This bot does not have Topics enabled. The bridge gives every Telegram topic its own agent\n"
-    "    session, so the bot's private chat must be in topic mode. Open @BotFather, choose your bot,\n"
-    "    open its settings in the BotFather mini app and turn on topics for the bot's private chat\n"
-    "    (named 'Threaded Mode' or 'Topics'), then come back here."
+    "  ✗ This bot does not have Topics (Threaded Mode) enabled yet. The bridge gives every topic its own\n"
+    "    agent session; until then all messages share one conversation. Open @BotFather → Mini App\n"
+    "    (Open) → select the bot → Bot Settings → Threaded Mode → On. This is not visible in the\n"
+    "    BotFather chat, and Telegram may report it only after you have opened the chat with the bot."
 )
 
 
@@ -89,15 +89,10 @@ def enter_token(client_factory):
             print(f"  ✗ {str(exc).replace(token, '[REDACTED]')}")
             continue
         print(f"  ✓ token valid, the bot is @{me.get('username')}")
-        while me.get("has_topics_enabled") is not True:
+        if me.get("has_topics_enabled") is True:
+            print("  ✓ Topics are enabled for this bot")
+        else:
             print(TOPICS_HELP)
-            if _ask("Press Enter to check again, or type q to quit").lower() == "q":
-                return None
-            try:
-                me = client.get_me()
-            except TelegramError as exc:
-                print(f"  ✗ {str(exc).replace(token, '[REDACTED]')}")
-        print("  ✓ Topics are enabled for this bot")
         return token, me, client
 
 

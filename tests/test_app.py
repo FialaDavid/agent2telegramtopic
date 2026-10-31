@@ -176,21 +176,28 @@ def test_main_without_config_fails_with_a_hint(monkeypatch, tmp_path, caplog):
     assert "setup" in caplog.text
 
 
-def test_main_refuses_bot_without_topics(monkeypatch, tmp_path):
+def test_main_starts_bridge_when_topics_are_reported_disabled(monkeypatch, tmp_path, caplog):
     class FakeClient:
-        def __init__(self, token):
-            self.token = token
-
         def get_me(self):
             return {"has_topics_enabled": False}
 
         def set_my_commands(self, commands):
             del commands
 
+    class FakeApp:
+        client = FakeClient()
+        ran = False
+
+        def run_forever(self):
+            self.ran = True
+    fake = FakeApp()
     monkeypatch.setattr(app_module.Path, "home", classmethod(lambda cls: tmp_path))
     write_config(tmp_path)
-    monkeypatch.setattr(app_module, "TelegramClient", FakeClient)
-    assert app_module.main([]) == 2
+    monkeypatch.setattr(app_module, "build_app", lambda config, token, cwd: fake)
+    assert app_module.main([]) == 0
+    assert fake.ran
+    assert caplog.text.count("topics are not enabled") == 1
+    assert FAKE_TOKEN not in caplog.text
 
 
 def test_main_resolves_workdir_before_building_app(monkeypatch, tmp_path):

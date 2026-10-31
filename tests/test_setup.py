@@ -115,20 +115,13 @@ def test_elevenlabs_key_is_stored_in_the_config_file(tmp_path, monkeypatch):
     assert load_config(tmp_path)["elevenlabs_api_key"] == key
 
 
-def test_bot_without_topics_is_rejected_with_botfather_instructions(tmp_path, monkeypatch, capsys):
-    Script(monkeypatch, {"Which agent": "2", "check again": "q"})
-    rc = wizard.run(tmp_path, factory(me=[NO_TOPICS_BOT]), platform="linux")
+def test_bot_without_topics_gets_botfather_instructions_and_setup_continues(tmp_path, monkeypatch, capsys):
+    script = Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
+    rc = wizard.run(tmp_path, factory(me=[NO_TOPICS_BOT], updates=[[dm(7)]]), platform="linux")
     out = capsys.readouterr().out
-    assert rc == 1
-    assert "does not have Topics enabled" in out and "@BotFather" in out
-    assert not config_file(tmp_path).exists()
-
-
-def test_topics_enabled_after_retry_continues(tmp_path, monkeypatch, capsys):
-    Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
-    rc = wizard.run(tmp_path, factory(me=[NO_TOPICS_BOT, GOOD_BOT], updates=[[dm(7)]]), platform="linux")
     assert rc == 0
-    assert "does not have Topics enabled" in capsys.readouterr().out
+    assert "Threaded Mode" in out and "@BotFather" in out
+    assert not any("check again" in p for p in script.asked)
     assert config_file(tmp_path).exists()
 
 

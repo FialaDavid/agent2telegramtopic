@@ -78,11 +78,11 @@ private chats. It does **not** work in groups: messages from groups and supergro
 so there is no group to create and no admin rights to grant.
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and keep its token.
-2. Turn on **topics for the bot's private chat** in BotFather's bot settings (BotFather mini
-   app; the option is called "Threaded Mode" / topics). The bridge refuses to start if
-   `getMe` does not report `has_topics_enabled: true`, and `setup` checks it for you with
-   instructions if it is off. *(The exact BotFather menu wording changes; the check is the
-   authority.)*
+2. Turn on **topics for the bot's private chat**: @BotFather → Mini App (Open) → select the bot →
+   Bot Settings → Threaded Mode → On. It is not visible in the BotFather chat, and `getMe` may
+   report it only after you have opened the chat with the bot. If it is off, `setup` and the bridge
+   still start; the bridge logs a warning and, on your first message, tells you once how to turn
+   it on. Until then everything goes to one conversation (no topics).
 3. Open the chat with your bot and create topics there (one per task).
 
 You do not need to change the bot's group privacy settings.

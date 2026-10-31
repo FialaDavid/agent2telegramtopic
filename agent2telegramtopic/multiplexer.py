@@ -52,6 +52,10 @@ class Multiplexer:
         # The bot's own user id (the token prefix); set by app.main so its own service messages
         # (e.g. the forum_topic_edited a rename produces) are not logged as foreign updates.
         self.bot_id = None
+        # False when the last getMe said topics are off; the first allowed message then re-checks
+        # and tells the user once per run how to turn them on (see _warn_topics_disabled).
+        self.topics_enabled = True
+        self._topics_notice_sent = False
         self.lane_store = lane_store
         self.max_live = max_live
         self.compact_min_tokens = compact_min_tokens
@@ -473,6 +477,24 @@ class Multiplexer:
                 except Exception:
                     self.log.exception("could not start lane %s during startup replay", key)
 
+    def _warn_topics_disabled(self, upd: dict) -> None:
+        # getMe may report has_topics_enabled only after the user has opened the bot chat, so a
+        # startup "disabled" is re-checked on the first message. Inline and never raises: the
+        # message is processed normally (in the single non-topic chat) either way.
+        msg = upd.get("message")
+        if self.topics_enabled is not False or self._topics_notice_sent or not isinstance(msg, dict):
+            return
+        self._topics_notice_sent = True
+        try:
+            if self.client.get_me().get("has_topics_enabled") is True:
+                self.topics_enabled = True
+                return
+            self.log.warning("Topics (Threaded Mode) are still not enabled for this bot; telling the user")
+            self.client.send_message(routing.LaneKey(msg["chat"]["id"], routing.GENERAL_THREAD_ID),
+                                     notices.TOPICS_DISABLED, parse_mode=None)
+        except Exception:
+            self.log.exception("could not check or announce disabled topics")
+
     # Delta (a): route to a per-topic LaneBridge by LaneKey instead of a2t's single session.
     # Delta (b): apply agent2telegramtopic' existing private-chat and sender allowlist at the top.
     # Delta (c): keep offset and processed ledger in the bot-level state directory.
@@ -513,6 +535,7 @@ class Multiplexer:
             self._mark_update_processed(update_id)
             self._save_offset(next_offset)
             return next_offset
+        self._warn_topics_disabled(upd)
         reaction = upd.get("message_reaction")
         if isinstance(reaction, dict):
             # Delta (B2): a reaction carries no message_thread_id; its topic is the one the

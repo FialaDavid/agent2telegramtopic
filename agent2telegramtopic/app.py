@@ -224,8 +224,9 @@ def main(argv=None) -> int:
             app.bot_id = int(token.split(":", 1)[0])
             me = app.client.get_me()
             if me.get("has_topics_enabled") is not True:
-                log.error("Bot topics are not enabled; refusing to start")
-                return 2
+                log.warning("Bot topics are not enabled (Threaded Mode); starting anyway, "
+                            "the first message will tell the user how to turn them on")
+                app.topics_enabled = False
             app.run_forever()
             return 0
     except AlreadyRunning:

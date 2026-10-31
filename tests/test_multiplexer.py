@@ -510,6 +510,65 @@ def test_own_bot_service_message_is_ignored_quietly_but_foreign_bot_still_warns(
     assert offset == 3
 
 
+class TopicsClient(Client):
+    def __init__(self, me):
+        super().__init__()
+        self.me = list(me)
+        self.get_me_calls = 0
+
+    def send_message(self, key, text, *, parse_mode="auto"):
+        self.sent.append((key, text, parse_mode))
+
+    def get_me(self):
+        self.get_me_calls += 1
+        item = self.me.pop(0) if len(self.me) > 1 else self.me[0]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def test_first_message_with_topics_disabled_tells_the_user_once_and_still_routes(tmp_path):
+    client = TopicsClient([{"has_topics_enabled": False}])
+    mux, lanes = make_mux(tmp_path, client)
+    mux.topics_enabled = False
+    first = {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"},
+             "from": {"id": 8}, "text": "hello"}}  # no message_thread_id: single non-topic chat
+    offset = mux._handle_update_once(first, 0)
+    mux._handle_update_once(update(2, thread=1), offset)
+    notices_sent = [m for m in client.sent if "Threaded Mode" in m[1]]
+    assert len(notices_sent) == 1
+    key, text = notices_sent[0][0], notices_sent[0][1]
+    assert key == LaneKey(123, 1) and "Threaded Mode" in text and "@BotFather" in text
+    lanes[LaneKey(123, 1)]._inbound_queue.join()
+    assert lanes[LaneKey(123, 1)]._session.injected == ["hello", "hello"]
+
+
+def test_no_notice_when_topics_turned_on_by_the_first_message(tmp_path):
+    client = TopicsClient([{"has_topics_enabled": True}])
+    mux, lanes = make_mux(tmp_path, client)
+    mux.topics_enabled = False
+    mux._handle_update_once(update(1, 10), 0)
+    assert client.sent == []
+    assert LaneKey(123, 10) in lanes
+
+
+def test_no_notice_when_topics_enabled_at_start(tmp_path):
+    client = TopicsClient([{"has_topics_enabled": False}])
+    mux, _ = make_mux(tmp_path, client)
+    mux._handle_update_once(update(1, 10), 0)
+    assert client.sent == [] and client.get_me_calls == 0
+
+
+def test_failing_topics_check_does_not_block_the_message(tmp_path):
+    client = TopicsClient([RuntimeError("network down")])
+    mux, lanes = make_mux(tmp_path, client)
+    mux.topics_enabled = False
+    mux._handle_update_once(update(1, 10), 0)
+    lanes[LaneKey(123, 10)]._inbound_queue.join()
+    assert lanes[LaneKey(123, 10)]._session.injected == ["hello"]
+    assert client.sent == []
+
+
 def test_restart_replays_pending_record_with_committed_offset(tmp_path):
     client = Client()
     mux, lanes = make_mux(tmp_path, client)
