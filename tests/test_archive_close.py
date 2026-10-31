@@ -330,6 +330,33 @@ def test_message_in_an_archived_topic_resumes_the_same_session(world, tmp_path, 
     assert len(records(tmp_path)) == 1
 
 
+def test_update_after_close_inbox_snapshot_is_routed_to_replacement(world, tmp_path, monkeypatch):
+    mux, bridge, client = world("claude-code")
+    mux._lanes[KEY] = bridge
+    mux._started_lanes.add(KEY)
+    inbox = bridge._ensure_inbox()
+    update = {"update_id": 91, "message": {
+        "chat": {"id": 123, "type": "private"}, "message_thread_id": 42,
+        "from": {"id": 8}, "text": "arrived during final close"}}
+    routed = threading.Event()
+    real_pending = inbox.pending
+
+    def snapshot_then_route():
+        snapshot = real_pending()
+        inbox.reserve(update)
+        lock_held = mux._lane_lock._is_owned()
+        threading.Thread(target=lambda: (mux._handle_update_once(update, 0), routed.set()), daemon=True).start()
+        if not lock_held:
+            assert routed.wait(2)
+        return snapshot
+
+    monkeypatch.setattr(inbox, "pending", snapshot_then_route)
+    close_and_wait(bridge, client, mux)
+    assert routed.wait(2)
+    assert mux.lane_store.get(KEY).status == "waiting"
+    assert any(record.update == update for record in inbox.pending())
+
+
 def test_archived_lanes_do_not_consume_live_slots(tmp_path):
     store = LaneStore(tmp_path / "slots.db")
     for thread in range(1, 6):

@@ -504,6 +504,7 @@ def test_internal_timeout_does_not_retire_lane_owned_by_close(tmp_path):
     retired = []
     session = Session()
     session.alive = True
+    session.close = lambda: setattr(session, "alive", False)
     bridge = LaneBridge(Telegram(), LaneKey(1, 14), tmp_path / "sent", tmp_path / "queue",
                         agent="claude-code", session=session, on_parked=retired.append)
     bridge._closing = True
