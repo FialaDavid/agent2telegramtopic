@@ -178,6 +178,83 @@ def test_failed_topic_edit_does_not_record_title(tmp_path):
     assert store.topic_titles() == {}
 
 
+def test_rename_command_edits_without_changing_icon_and_records_title(tmp_path):
+    from types import SimpleNamespace
+    from test_lane_commands import make_lane
+
+    class Client:
+        def __init__(self): self.calls = []
+        def _call(self, method, params, **kwargs): self.calls.append((method, params, kwargs))
+        def send_message(self, key, text, **kwargs): sent.append((LaneKey(key, 12), text))
+
+    client, sent = Client(), []
+    lane, _ = make_lane(tmp_path, client=client)
+    lane.tg = SimpleNamespace(client=client, send_message=client.send_message)
+    lane._lane_store = LaneStore(tmp_path / "lanes.db")
+    assert lane._handle_command("/rename  Foo  ", 44)
+    assert client.calls[0][0:2] == ("editForumTopic", {"chat_id": 44, "message_thread_id": 12, "name": "Foo"})
+    assert lane._lane_store.topic_titles()[LaneKey(44, 12)] == "Foo"
+    assert sent[0][0] == LaneKey(44, 12) and "Foo" in sent[0][1]
+
+
+def test_rename_command_records_title_when_api_says_not_modified(tmp_path):
+    from types import SimpleNamespace
+    from test_lane_commands import make_lane
+    from agent2telegramtopic.telegram import TelegramError
+
+    class Client:
+        def _call(self, method, params, **kwargs): raise TelegramError(400, "TOPIC_NOT_MODIFIED")
+        def send_message(self, key, text, **kwargs): sent.append(text)
+
+    sent, client = [], Client()
+    lane, _ = make_lane(tmp_path, client=client)
+    lane.tg = SimpleNamespace(client=client, send_message=client.send_message)
+    lane._lane_store = LaneStore(tmp_path / "lanes.db")
+    assert lane._handle_command("/rename Existing", 44)
+    assert lane._lane_store.topic_titles()[LaneKey(44, 12)] == "Existing"
+    assert sent and "Existing" in sent[0]
+
+
+def test_rename_command_reports_api_failure_without_recording_title(tmp_path):
+    from types import SimpleNamespace
+    from test_lane_commands import make_lane
+    from agent2telegramtopic.telegram import TelegramError
+
+    class Client:
+        def _call(self, method, params, **kwargs): raise TelegramError(400, "FORUM_TOPIC_CLOSED")
+        def send_message(self, key, text, **kwargs): sent.append(text)
+
+    sent, client = [], Client()
+    lane, _ = make_lane(tmp_path, client=client)
+    lane.tg = SimpleNamespace(client=client, send_message=client.send_message)
+    lane._lane_store = LaneStore(tmp_path / "lanes.db")
+    assert lane._handle_command("/rename Closed", 44)
+    assert lane._lane_store.topic_titles() == {}
+    assert sent and "FORUM_TOPIC_CLOSED" in sent[0]
+
+
+@pytest.mark.parametrize("text,key", [
+    ("/rename", LaneKey(44, 12)), ("/rename " + "x" * 129, LaneKey(44, 12)),
+    ("/rename Foo", LaneKey(44, 1)),
+])
+def test_rename_validation_does_not_call_api_or_record_title(tmp_path, text, key):
+    from types import SimpleNamespace
+    from test_lane_commands import make_lane
+
+    class Client:
+        calls = []
+        def _call(self, method, params, **kwargs): self.calls.append(method)
+        def send_message(self, key, text, **kwargs): sent.append(text)
+
+    sent, client = [], Client()
+    lane, _ = make_lane(tmp_path, key=key, client=client)
+    lane.tg = SimpleNamespace(client=client, send_message=client.send_message)
+    lane._lane_store = LaneStore(tmp_path / "lanes.db")
+    assert lane._handle_command(text, 44)
+    assert not client.calls and lane._lane_store.topic_titles() == {}
+    assert sent
+
+
 def test_topic_edit_accepts_emoji_with_variation_selector(tmp_path):
     api = Api()
     assert edit(tmp_path, ["Trip", "✈"], api) == 0

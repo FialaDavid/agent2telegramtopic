@@ -31,7 +31,8 @@ from .config import claude_rate_limits_file, cli_command, save_elevenlabs_key
 from .inbound import sender_label
 from .redaction import message_metadata, update_metadata
 from .routing import LaneKey
-from .telegram import split_message
+from .telegram import split_message, TelegramError
+from .routing import GENERAL_THREAD_ID
 from . import dialog, readers, transcript, tts, usage
 from .session import BLOCKED_BY_OVERLAY, SessionError
 
@@ -44,6 +45,7 @@ BOT_COMMANDS = [
     {"command": "status", "description": "Bridge health and queue status"},
     {"command": "usage", "description": "Model usage limits"},
     {"command": "new", "description": "Start a fresh conversation"},
+    {"command": "rename", "description": "Rename this topic"},
     {"command": "setkey", "description": "Enable voice (your ElevenLabs API key)"},
     {"command": "voice", "description": "Toggle spoken (voice-note) replies"},
     {"command": "id", "description": "Show your Telegram id"},
@@ -692,6 +694,24 @@ class LaneBridge:
             return True
         if cmd == "new":
             return self._cmd_new(chat_id)
+        if cmd == "rename":
+            if not arg:
+                self.tg.send_message(chat_id, "Usage: `/rename <name>`")
+            elif len(arg) > 128:
+                self.tg.send_message(chat_id, "Topic names can be at most 128 characters.")
+            elif self.key.thread_id == GENERAL_THREAD_ID:
+                self.tg.send_message(chat_id, "`/rename` works only inside a topic.")
+            else:
+                try:
+                    from .topicedit import edit_topic
+                    edit_topic(self.tg.client, chat_id, self.key.thread_id, arg)
+                except TelegramError as exc:
+                    self.tg.send_message(chat_id, f"⚠️ Couldn't rename this topic: {exc.description}")
+                else:
+                    if self._lane_store is not None:
+                        self._lane_store.set_topic_title(self.key, arg)
+                    self.tg.send_message(chat_id, f"✅ Topic renamed to “{arg}”.")
+            return True
         if cmd == "setkey":
             return self._set_voice_key(arg, chat_id, message_id)
         if cmd == "voice":

@@ -80,7 +80,7 @@ def test_startup_registers_all_supported_topic_commands(monkeypatch, tmp_path):
 
     assert app_module.main([]) == 0
     assert [item["command"] for item in registered] == [
-        "start", "help", "status", "usage", "new", "setkey", "voice", "id", "close"]
+        "start", "help", "status", "usage", "new", "rename", "setkey", "voice", "id", "close"]
     assert all(item.get("description") for item in registered)
 
 

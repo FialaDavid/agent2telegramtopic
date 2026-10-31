@@ -63,6 +63,7 @@ when no message is waiting; streaming and unrecognised screens are ignored.
 | `/status` | session, queue and voice status of this topic |
 | `/usage` | rate-limit usage of the agent (5-hour / 7-day windows, when they reset) |
 | `/new` | start a fresh conversation in this topic (`/clear` for Claude Code, `/new` for Codex) |
+| `/rename <name>` | rename this topic |
 | `/setkey <key>` | store your ElevenLabs key (your message is deleted right after) |
 | `/voice` | toggle spoken replies for this topic |
 | `/id` | show your Telegram id |

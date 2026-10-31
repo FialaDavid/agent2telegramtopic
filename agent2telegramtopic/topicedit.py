@@ -17,6 +17,17 @@ from .telegram import TelegramClient, TelegramError
 _VS16 = "️"
 
 
+def edit_topic(client, chat: int, thread: int, name: str, icon: str | None = None) -> None:
+    params = {"chat_id": chat, "message_thread_id": thread, "name": name}
+    if icon is not None:
+        params["icon_custom_emoji_id"] = icon
+    try:
+        client._call("editForumTopic", params, timeout=15, retries=0)
+    except TelegramError as exc:
+        if "TOPIC_NOT_MODIFIED" not in str(exc):
+            raise
+
+
 def topic_from_cwd(cwd: Path) -> tuple[int, int] | None:
     """(chat id, thread id) from the nearest ``<chat>/<thread>`` directory pair at or above cwd."""
     parts = [cwd, *cwd.parents]
@@ -48,12 +59,7 @@ def main(argv=None, *, home: Path | None = None, cwd: Path | None = None, client
         if icon is None:
             print(f"Emoji {emoji} is not an allowed topic icon. Allowed: {' '.join(icons)}", file=sys.stderr)
             return 1
-        try:
-            client._call("editForumTopic", {"chat_id": chat, "message_thread_id": thread, "name": name,
-                                            "icon_custom_emoji_id": icon}, timeout=15, retries=0)
-        except TelegramError as exc:
-            if "TOPIC_NOT_MODIFIED" not in str(exc):
-                raise
+        edit_topic(client, chat, thread, name, icon)
         store = LaneStore(state_db_path(raw_config["bot_username"].strip(), home))
         store.set_topic_title(LaneKey(chat, thread), name)
     except (TelegramError, ValueError) as exc:
