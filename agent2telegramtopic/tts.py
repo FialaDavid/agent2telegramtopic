@@ -121,6 +121,43 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
     raise TTSError("ElevenLabs TTS failed")   # pragma: no cover
 
 
+# ── Custom endpoint (config key ``tts_url``) ─────────────────────────────────────────────
+_AUDIO_TYPES = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav", "audio/vnd.wave": "wav",
+                "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/ogg": "ogg", "audio/opus": "ogg"}
+
+
+def audio_format(data: bytes, content_type: str = "") -> str | None:
+    """"wav", "mp3" or "ogg" from the first bytes, else from the Content-Type; None when neither fits."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "wav"
+    if data[:4] == b"OggS":
+        return "ogg"
+    if data[:3] == b"ID3" or (len(data) > 1 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0):
+        return "mp3"
+    return _AUDIO_TYPES.get(content_type.split(";")[0].strip().lower())
+
+
+def synthesize_custom(text: str, *, url: str, params: dict | None = None, timeout: float = 120,
+                      opener=None) -> bytes:
+    """POST ``{"text": text, **params}`` as JSON to *url* and return the WAV/MP3/OGG audio it answers with.
+    The URL is never put into an error message."""
+    if not (text or "").strip():
+        raise TTSError("nothing to speak")
+    req = urllib.request.Request(
+        url, data=json.dumps({"text": text, **(params or {})}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "audio/wav, audio/mpeg, audio/ogg"},
+        method="POST")
+    try:
+        with (opener or urllib.request.build_opener()).open(req, timeout=timeout) as resp:
+            audio = resp.read()
+            content_type = getattr(resp, "headers", None) and resp.headers.get("Content-Type") or ""
+    except (urllib.error.URLError, TimeoutError, OSError) as e:   # HTTPError is a URLError
+        raise TTSError(f"TTS endpoint failed: {_describe_error(e)}") from e
+    if not audio or audio_format(audio, content_type) is None:
+        raise TTSError("TTS endpoint did not return WAV, MP3 or OGG audio")
+    return audio
+
+
 # ── Long narrations (2026-09-05) ─────────────────────────────────────────────────────────
 # Support extended, podcast-style narration. One ElevenLabs request takes a few thousand
 # characters at most and long single requests are where the

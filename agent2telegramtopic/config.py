@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+from urllib.parse import urlsplit
 import agent2telegramtopic
 from agent2telegramtopic import keychain
 
@@ -24,6 +25,10 @@ class Config:
     tts_speed: float = 1.25
     tts_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
     tts_model_id: str = "eleven_turbo_v2_5"
+    # A custom speech endpoint instead of ElevenLabs: POST {"text": ..., **tts_params} -> WAV/MP3/OGG.
+    tts_url: str = ""
+    tts_params: dict = field(default_factory=dict)
+    tts_timeout: float = 120
     file_marker: str = "[tg-file]"
     outbox_dirs: list[str] = field(default_factory=list)
     # Claude Code: show work that runs outside a Telegram turn — running sub-agents (one message
@@ -40,6 +45,17 @@ class Config:
         if (not isinstance(self.tts_speed, (int, float)) or isinstance(self.tts_speed, bool)
                 or not 0.5 <= self.tts_speed <= 2.0):
             raise ValueError("'tts_speed' must be between 0.5 and 2.0.")
+        if self.tts_url:
+            parts = urlsplit(self.tts_url) if isinstance(self.tts_url, str) else None
+            if parts is None or parts.scheme not in ("http", "https") or not parts.netloc:
+                raise ValueError("'tts_url' must be an http:// or https:// URL.")
+        elif self.tts_url != "":
+            raise ValueError("'tts_url' must be an http:// or https:// URL.")
+        if not isinstance(self.tts_params, dict):
+            raise ValueError("'tts_params' must be an object.")
+        if (not isinstance(self.tts_timeout, (int, float)) or isinstance(self.tts_timeout, bool)
+                or self.tts_timeout <= 0):
+            raise ValueError("'tts_timeout' must be a positive number of seconds.")
         if type(self.background_progress) is not bool:
             raise ValueError("'background_progress' must be a boolean.")
         if type(self.inbound_sender_label) is not bool:
@@ -50,11 +66,12 @@ APP_DIRNAME = ".agent2telegramtopic"
 
 #: Optional settings accepted in config.json besides the required ones below.
 _OPTIONAL_KEYS = {"token", "token_keychain", "elevenlabs_api_key_keychain", "elevenlabs_api_key", "elevenlabs_language", "tts_speed", "tts_voice_id",
-                  "tts_model_id", "file_marker", "outbox_dirs", "background_progress",
-                  "inbound_sender_label", "max_live_lanes", "idle_compact_minutes",
+                  "tts_model_id", "tts_url", "tts_params", "tts_timeout", "file_marker", "outbox_dirs",
+                  "background_progress", "inbound_sender_label", "max_live_lanes", "idle_compact_minutes",
                   "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir"}
 _REQUIRED_KEYS = {"agent", "allowed_user_ids", "bot_username"}
-_FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id", "file_marker",
+_FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
+               "tts_timeout", "file_marker",
                "outbox_dirs", "background_progress", "inbound_sender_label", "max_live_lanes",
                "idle_compact_minutes", "compact_min_tokens"}
 

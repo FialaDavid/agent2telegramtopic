@@ -220,7 +220,10 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 | `elevenlabs_language` | `""` | Language hint for transcription (empty = auto-detect) |
 | `tts_voice_id` | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice for spoken replies |
 | `tts_model_id` | `eleven_turbo_v2_5` | ElevenLabs TTS model |
-| `tts_speed` | `1.25` | Playback speed of spoken replies (0.5 to 2.0) |
+| `tts_speed` | `1.25` | Playback speed of spoken replies (0.5 to 2.0); applied by ffmpeg, whichever speech engine is used |
+| `tts_url` | `""` | Custom speech endpoint (`http://` or `https://`) used instead of ElevenLabs, see [Custom speech endpoint](#custom-speech-endpoint) |
+| `tts_params` | `{}` | Object merged into the JSON body sent to `tts_url` |
+| `tts_timeout` | `120` | Seconds to wait for `tts_url` (a positive number) |
 | `max_live_lanes` | `4` | Sessions kept live at once |
 | `idle_compact_minutes` | `45` | Idle time before a session is compacted and parked |
 | `compact_min_tokens` | `30000` | Minimum context size that is worth compacting |
@@ -234,6 +237,26 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 
 Everything the bridge owns lives under `~/.agent2telegramtopic/`: `config.json`, `state/`
 (queues, offsets, per-topic state), `topics/`, `logs/`, `tmux/`.
+
+## Custom speech endpoint
+
+Spoken replies come from ElevenLabs unless `tts_url` is set. With it, every spoken reply is one
+`POST` to that URL with the JSON body `{"text": "<the reply, prepared for speech>", ...tts_params}`
+(`Content-Type: application/json`), waiting at most `tts_timeout` seconds. The answer must be WAV,
+MP3 or OGG audio (recognized by its first bytes or its `Content-Type`); the bridge converts it with
+`ffmpeg` to a Telegram voice note exactly as it does for ElevenLabs, including the `tts_speed` tempo.
+No ElevenLabs key is needed for replies. If the endpoint fails or answers with something that is not
+audio, the reply is sent as text, as when ElevenLabs fails; there is no retry and no other engine.
+Transcription of incoming voice notes is unaffected (still ElevenLabs Scribe).
+
+Example, a local loopback service that takes only `text`:
+
+```json
+{"tts_url": "http://127.0.0.1:8478/synthesize", "tts_params": {}, "tts_timeout": 120, "tts_speed": 1.25}
+```
+
+`tts_params` carries whatever extra fields your service understands, for example
+`{"voice": "anna"}`; the bridge does not interpret them.
 
 ## Keychain (macOS)
 

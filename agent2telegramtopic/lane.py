@@ -285,8 +285,8 @@ class LaneBridge:
         self.inbound_sender_label = False   # config default (a2t config.py)
         if config is not None:
             for name in ("bot_name", "elevenlabs_api_key", "elevenlabs_language",
-                         "tts_speed", "tts_voice_id", "tts_model_id", "file_marker", "outbox_dirs",
-                         "background_progress", "inbound_sender_label"):
+                         "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
+                         "tts_timeout", "file_marker", "outbox_dirs", "background_progress", "inbound_sender_label"):
                 setattr(self, name, getattr(config, name))
         if getattr(self, "bot_name", None):
             _BOT_ELEVENLABS_KEYS.setdefault(self.bot_name, getattr(self, "elevenlabs_api_key", ""))
@@ -1964,9 +1964,13 @@ class LaneBridge:
             return False
         try:
             spoken = tts.sanitize_for_speech(text)
-            audio = tts.synthesize(
-                spoken, api_key=self._elevenlabs_key(), voice_id=self.cfg.tts_voice_id,
-                model_id=self.cfg.tts_model_id)
+            if self.cfg.tts_url:
+                audio = tts.synthesize_custom(spoken, url=self.cfg.tts_url, params=self.cfg.tts_params,
+                                              timeout=self.cfg.tts_timeout)
+            else:
+                audio = tts.synthesize(
+                    spoken, api_key=self._elevenlabs_key(), voice_id=self.cfg.tts_voice_id,
+                    model_id=self.cfg.tts_model_id)
         except Exception as e:
             log.warning("voice reply TTS failed: error=%s %s", type(e).__name__,
                         message_metadata(text, kind="voice"))
