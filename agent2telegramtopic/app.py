@@ -221,6 +221,7 @@ def main(argv=None) -> int:
             root = str(selected_cwd.resolve())
             app = build_app(config, token, root)
             app.client.set_my_commands(BOT_COMMANDS)
+            app.bot_id = int(token.split(":", 1)[0])
             me = app.client.get_me()
             if me.get("has_topics_enabled") is not True:
                 log.error("Bot topics are not enabled; refusing to start")

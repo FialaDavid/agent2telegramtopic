@@ -492,6 +492,24 @@ def test_disallowed_sender_and_group_create_no_lane_warn_safely_and_advance(tmp_
     assert json.loads((tmp_path / "bot" / "processed_updates").read_text()) == {"update_ids": [1, 2]}
 
 
+def test_own_bot_service_message_is_ignored_quietly_but_foreign_bot_still_warns(tmp_path, caplog):
+    client = Client()
+    mux, lanes = make_mux(tmp_path, client)
+    mux.bot_id = 555
+
+    def edited(uid, sender):
+        return {"update_id": uid, "message": {"chat": {"id": 123, "type": "private"},
+                "message_thread_id": 10, "from": sender, "forum_topic_edited": {"name": "New"}}}
+    with caplog.at_level(logging.DEBUG):
+        offset = mux._handle_update_once(edited(1, {"id": 555, "is_bot": True}), 0)
+        quiet = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        offset = mux._handle_update_once(edited(2, {"id": 556, "is_bot": True}), offset)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert quiet == [] and len(warnings) == 1
+    assert lanes == {} and client.sent == []
+    assert offset == 3
+
+
 def test_restart_replays_pending_record_with_committed_offset(tmp_path):
     client = Client()
     mux, lanes = make_mux(tmp_path, client)

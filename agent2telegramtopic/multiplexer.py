@@ -49,6 +49,9 @@ class Multiplexer:
         self._lane_lock = threading.RLock()
         self._started_lanes = set()
         self._outbound_started_lanes = set()
+        # The bot's own user id (the token prefix); set by app.main so its own service messages
+        # (e.g. the forum_topic_edited a rename produces) are not logged as foreign updates.
+        self.bot_id = None
         self.lane_store = lane_store
         self.max_live = max_live
         self.compact_min_tokens = compact_min_tokens
@@ -499,7 +502,11 @@ class Multiplexer:
             msg = upd.get("message") or upd.get("edited_message") or {}
             chat = msg.get("chat") if isinstance(msg, dict) else {}
             sender = msg.get("from") if isinstance(msg, dict) else {}
-            self.log.warning("Ignoring disallowed Telegram update update_id=%s chat_id=%s chat_type=%s sender_id=%s %s",
+            # The bot's own service messages (a topic-edit rename echoes back) are expected noise.
+            own = (isinstance(sender, dict) and sender.get("is_bot") is True
+                   and self.bot_id is not None and sender.get("id") == self.bot_id)
+            self.log.log(logging.DEBUG if own else logging.WARNING,
+                         "Ignoring disallowed Telegram update update_id=%s chat_id=%s chat_type=%s sender_id=%s %s",
                              update_id, chat.get("id") if isinstance(chat, dict) else None,
                              chat.get("type") if isinstance(chat, dict) else None,
                              sender.get("id") if isinstance(sender, dict) else None, update_metadata(upd))
