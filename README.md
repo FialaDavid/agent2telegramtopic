@@ -117,8 +117,10 @@ The wizard:
 4. authorizes you: you send the bot a message in its private chat and the wizard reads your
    Telegram user id from it (messages from groups are refused);
 5. optionally stores an ElevenLabs key;
-6. writes `~/.agent2telegramtopic/config.json` with mode `0600`;
-7. installs and starts the background service:
+6. on macOS, offers to keep the bot token (and the ElevenLabs key) in the Keychain instead of
+   `config.json` (default yes, see [Keychain](#keychain-macos));
+7. writes `~/.agent2telegramtopic/config.json` with mode `0600`;
+8. installs and starts the background service:
    - macOS: `~/Library/LaunchAgents/com.agent2telegramtopic.bridge.plist` (launchd user agent);
    - Linux: `~/.config/systemd/user/agent2telegramtopic.service` (`systemd --user`). To keep it
      running after you log out: `loginctl enable-linger $USER`.
@@ -209,10 +211,12 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 | Key | Default | Meaning |
 |---|---|---|
 | `agent` | | `claude-code` or `codex` |
-| `token` | | Telegram bot token (**secret**) |
+| `token` | | Telegram bot token (**secret**). Exactly one of `token` and `token_keychain` is required |
+| `token_keychain` | | macOS only: `{"service": "...", "account": "..."}` (`account` optional), the Keychain item that holds the bot token |
 | `allowed_user_ids` | | Telegram user ids allowed to talk to the bot (non-empty list of integers) |
 | `bot_username` | | Bot username; also names the state directory |
 | `elevenlabs_api_key` | `""` | ElevenLabs key (**secret**). If empty, the `ELEVENLABS_API_KEY` environment variable is used |
+| `elevenlabs_api_key_keychain` | | macOS only: Keychain item for the ElevenLabs key, same form as `token_keychain`; not together with `elevenlabs_api_key` |
 | `elevenlabs_language` | `""` | Language hint for transcription (empty = auto-detect) |
 | `tts_voice_id` | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice for spoken replies |
 | `tts_model_id` | `eleven_turbo_v2_5` | ElevenLabs TTS model |
@@ -231,6 +235,26 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 Everything the bridge owns lives under `~/.agent2telegramtopic/`: `config.json`, `state/`
 (queues, offsets, per-topic state), `topics/`, `logs/`, `tmux/`.
 
+## Keychain (macOS)
+
+Instead of writing secrets into `config.json` you can point it at Keychain items:
+
+```json
+{"agent": "claude-code", "allowed_user_ids": [123456789], "bot_username": "my_bot",
+ "token_keychain": {"service": "agent2telegramtopic.my_bot"},
+ "elevenlabs_api_key_keychain": {"service": "agent2telegramtopic.my_bot.elevenlabs"}}
+```
+
+At startup the bridge reads each item with `security find-generic-password -s <service> [-a <account>] -w`;
+if an item is missing or unreadable (or the machine is not a Mac) it exits with an error naming the
+service, never the secret. A missing ElevenLabs item only means "no key yet". On macOS the setup wizard
+asks (default yes) whether to store the token, and the ElevenLabs key if you enter one, this way, under
+the service names `agent2telegramtopic.<bot_username>` and `agent2telegramtopic.<bot_username>.elevenlabs`;
+on Linux it asks nothing. With `elevenlabs_api_key_keychain` set, `/setkey` updates the Keychain item
+(account `agent2telegramtopic` when the config names none) and leaves `config.json` untouched; the key goes
+to `security -i` on standard input, so it does not show up in a process listing. Values read from the
+Keychain are masked in logs.
+
 ## Security notes
 
 - **The agent runs unattended with full permissions.** The default commands pass
@@ -243,7 +267,7 @@ Everything the bridge owns lives under `~/.agent2telegramtopic/`: `config.json`,
 - Only users in `allowed_user_ids` are served, and only in private chats; everything else is
   logged and ignored.
 - `config.json` holds the bot token and the ElevenLabs key; it is written with mode `0600`.
-  There is no keychain integration. Do not commit or share it. The token is redacted from logs
+  On macOS the secrets can live in the Keychain instead (see [Keychain](#keychain-macos)). Do not commit or share it. The token is redacted from logs
   and error messages, and `/setkey` deletes your message so the key does not stay in the chat.
 - If a token leaks, revoke it with @BotFather (`/revoke`) and run `setup` again.
 

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from agent2telegramtopic import redaction
-from agent2telegramtopic.config import (CONFIG_ENV, Config, app_dir, build_config, config_file, hooks_settings_file,
+from agent2telegramtopic.config import (CONFIG_ENV, Config, app_dir, bot_token, build_config, config_file, hooks_settings_file,
                                  is_default_instance, lane_path, lane_state_file, load_config,
                                  lanes_root, state_db_path, write_hooks_settings)
 from agent2telegramtopic.lane import BOT_COMMANDS, LaneBridge
@@ -222,9 +222,13 @@ def main(argv=None) -> int:
         except ValueError as exc:
             log.error("%s", exc)
             return 2
-        config = build_config(raw)
+        try:
+            config = build_config(raw)
+            token = bot_token(raw)
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 2
         use_private_tmux()
-        token = raw["token"]
         bot = config.bot_name
         with single_instance_lock(lock_file(bot)):
             if raw.get("workdir"):

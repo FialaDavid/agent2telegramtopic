@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shlex
 import agent2telegramtopic
+from agent2telegramtopic import keychain
 
 
 @dataclass(frozen=True)
@@ -48,11 +49,11 @@ class Config:
 APP_DIRNAME = ".agent2telegramtopic"
 
 #: Optional settings accepted in config.json besides the required ones below.
-_OPTIONAL_KEYS = {"elevenlabs_api_key", "elevenlabs_language", "tts_speed", "tts_voice_id",
+_OPTIONAL_KEYS = {"token", "token_keychain", "elevenlabs_api_key_keychain", "elevenlabs_api_key", "elevenlabs_language", "tts_speed", "tts_voice_id",
                   "tts_model_id", "file_marker", "outbox_dirs", "background_progress",
                   "inbound_sender_label", "max_live_lanes", "idle_compact_minutes",
                   "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir"}
-_REQUIRED_KEYS = {"agent", "token", "allowed_user_ids", "bot_username"}
+_REQUIRED_KEYS = {"agent", "allowed_user_ids", "bot_username"}
 _FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id", "file_marker",
                "outbox_dirs", "background_progress", "inbound_sender_label", "max_live_lanes",
                "idle_compact_minutes", "compact_min_tokens"}
@@ -131,7 +132,7 @@ def load_config(home: Path | None = None) -> dict:
     missing = _REQUIRED_KEYS - set(raw)
     if missing:
         raise ValueError(f"Missing config keys: {', '.join(sorted(missing))}")
-    build_config(raw)
+    build_config(raw, keychain_secrets=False)
     return raw
 
 
@@ -150,15 +151,37 @@ def save_config(raw: dict, home: Path | None = None) -> Path:
 
 
 def save_elevenlabs_key(key: str, home: Path | None = None) -> None:
+    """Store the key where config.json says: in the Keychain item it names, else in config.json itself."""
     raw = load_config(home)
+    if "elevenlabs_api_key_keychain" in raw:
+        service, account = keychain.reference(raw, "elevenlabs_api_key_keychain")
+        keychain.write(service, account, key)
+        return
     raw["elevenlabs_api_key"] = key
     save_config(raw, home)
 
 
-def build_config(raw: dict) -> Config:
-    """Turn a config.json mapping into a validated Config (the bot token is not part of it)."""
-    if not isinstance(raw.get("token"), str) or not raw["token"].strip():
+def bot_token(raw: dict) -> str:
+    """The Telegram bot token: from config.json, or read from the Keychain item ``token_keychain`` names."""
+    if "token" in raw:
+        return raw["token"]
+    return keychain.read(*keychain.reference(raw, "token_keychain"))
+
+
+def build_config(raw: dict, keychain_secrets: bool = True) -> Config:
+    """Turn a config.json mapping into a validated Config (the bot token is not part of it).
+
+    ``keychain_secrets=False`` only validates Keychain references instead of reading them."""
+    if ("token" in raw) == ("token_keychain" in raw):
+        raise ValueError("exactly one of 'token' and 'token_keychain' is required")
+    if "token_keychain" in raw:
+        keychain.reference(raw, "token_keychain")
+    elif not isinstance(raw["token"], str) or not raw["token"].strip():
         raise ValueError("'token' must be a non-empty string")
+    if "elevenlabs_api_key" in raw and "elevenlabs_api_key_keychain" in raw:
+        raise ValueError("use only one of 'elevenlabs_api_key' and 'elevenlabs_api_key_keychain'")
+    if "elevenlabs_api_key_keychain" in raw:
+        reference = keychain.reference(raw, "elevenlabs_api_key_keychain")
     if not isinstance(raw.get("bot_username"), str) or not raw["bot_username"].strip():
         raise ValueError("'bot_username' must be a non-empty string")
     ids = raw.get("allowed_user_ids")
@@ -171,7 +194,10 @@ def build_config(raw: dict) -> Config:
             if not isinstance(raw[key], str) or not raw[key].strip():
                 raise ValueError(f"'{key}' must be a non-empty command string")
             values[key] = tuple(shlex.split(raw[key]))
-    key = raw.get("elevenlabs_api_key") or os.environ.get("ELEVENLABS_API_KEY", "")
+    key = raw.get("elevenlabs_api_key", "")
+    if "elevenlabs_api_key_keychain" in raw and keychain_secrets:
+        key = keychain.read(*reference, missing_ok=True)   # a missing item just means no key yet (/setkey)
+    key = key or os.environ.get("ELEVENLABS_API_KEY", "")
     return Config(raw["bot_username"].strip(), raw["agent"], frozenset(ids),
                   elevenlabs_api_key=key, **values)
 

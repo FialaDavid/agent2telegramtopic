@@ -18,6 +18,15 @@ AUTH = re.compile(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_.=:%-]+")
 TOKENS = re.compile(r"(?:\d{6,16}:[A-Za-z0-9_-]{20,}|\b(?:sk-ant-|sk-proj-|sk_|ghp_|github_pat_|xox[bp]-|AIza|AKIA)[A-Za-z0-9_-]{6,})")
 URL = re.compile(r"""https?://[^\s<>"']+""", re.I)
 
+_SECRETS: set[str] = set()
+
+
+def register_secret(value):
+    """Mask this exact value wherever it shows up in a log line, whatever it looks like."""
+    if isinstance(value, str) and len(value) >= 8:
+        _SECRETS.add(value)
+
+
 def sensitive(key):
     return bool(re.fullmatch(KEY, str(key), re.I))
 
@@ -38,6 +47,8 @@ def _url(match):
         return MASK
 
 def _text(text):
+    for secret in _SECRETS:
+        text = text.replace(secret, MASK)
     # Shell/JSON escaping can hide delimiters from a text regex. Diagnostic
     # output may be suppressed entirely; never partially expose such a value.
     if '\\' in text and re.search(KEY, text, re.I):

@@ -9,7 +9,7 @@ import re
 import sys
 from pathlib import Path
 
-from .config import load_config
+from .config import bot_token, load_config
 from .telegram import TelegramClient, TelegramError
 
 _VS16 = "️"
@@ -38,7 +38,7 @@ def main(argv=None, *, home: Path | None = None, cwd: Path | None = None, client
     chat, thread = topic
     try:
         if client is None:
-            client = TelegramClient(load_config(home)["token"])
+            client = TelegramClient(bot_token(load_config(home)))
         stickers = client._call("getForumTopicIconStickers", timeout=15)
         icons = {s["emoji"].replace(_VS16, ""): s["custom_emoji_id"] for s in stickers}
         icon = icons.get(emoji.replace(_VS16, ""))

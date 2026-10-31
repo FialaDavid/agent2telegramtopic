@@ -74,6 +74,15 @@ def isolated(monkeypatch, tmp_path):
     return installed
 
 
+@pytest.fixture(autouse=True)
+def keychain_writes(monkeypatch):
+    """No test may reach the real Keychain."""
+    writes = []
+    monkeypatch.setattr(wizard.keychain, "write",
+                        lambda service, account, secret, **kw: writes.append((service, account, secret)))
+    return writes
+
+
 def factory(**kwargs):
     return lambda token: FakeClient(token, **kwargs)
 
@@ -92,7 +101,7 @@ def test_happy_path_writes_private_config_and_installs_service(tmp_path, monkeyp
 
 def test_claude_choice_prepares_per_session_hooks_without_touching_global_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    Script(monkeypatch, {"Which agent": "1", "Install and start": "n"})
+    Script(monkeypatch, {"Which agent": "1", "Keychain": "n", "Install and start": "n"})
     assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="darwin") == 0
     hooks = json.loads(hooks_settings_file("example_bot", tmp_path).read_text())
     assert set(hooks["hooks"]) == {"Stop", "SessionStart"}
@@ -181,3 +190,48 @@ def test_service_failure_is_reported_but_config_is_kept(tmp_path, monkeypatch, c
     assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="linux") == 1
     assert "could not install the service" in capsys.readouterr().out
     assert config_file(tmp_path).exists()
+
+
+def test_on_macos_the_token_goes_to_the_keychain_by_default(tmp_path, monkeypatch, keychain_writes, capsys):
+    script = Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="darwin") == 0
+    assert any("Store the bot token in the macOS Keychain instead of config.json?" in p for p in script.asked)
+    assert keychain_writes == [("agent2telegramtopic.example_bot", None, TOKEN)]
+    saved = load_config(tmp_path)
+    assert "token" not in saved and saved["token_keychain"] == {"service": "agent2telegramtopic.example_bot"}
+    assert TOKEN not in config_file(tmp_path).read_text() and TOKEN not in capsys.readouterr().out
+
+
+def test_on_macos_the_elevenlabs_key_is_asked_about_separately(tmp_path, monkeypatch, keychain_writes):
+    key = "sk_" + "z" * 24
+    script = Script(monkeypatch, {"Which agent": "2", "via ElevenLabs": "y", "bot token in the macOS": "n",
+                                  "Install and start": "n"}, secrets=(TOKEN, key))
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="darwin") == 0
+    assert any("Store the ElevenLabs key in the macOS Keychain" in p for p in script.asked)
+    assert keychain_writes == [("agent2telegramtopic.example_bot.elevenlabs", None, key)]
+    saved = load_config(tmp_path)
+    assert saved["token"] == TOKEN and "elevenlabs_api_key" not in saved
+    assert saved["elevenlabs_api_key_keychain"] == {"service": "agent2telegramtopic.example_bot.elevenlabs"}
+
+
+def test_declining_the_keychain_keeps_the_secrets_in_the_config_file(tmp_path, monkeypatch, keychain_writes):
+    Script(monkeypatch, {"Which agent": "2", "Keychain": "n", "Install and start": "n"})
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="darwin") == 0
+    assert keychain_writes == [] and load_config(tmp_path)["token"] == TOKEN
+
+
+def test_on_linux_there_is_no_keychain_question(tmp_path, monkeypatch, keychain_writes):
+    script = Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="linux") == 0
+    assert not any("Keychain" in p for p in script.asked)
+    assert load_config(tmp_path)["token"] == TOKEN and keychain_writes == []
+
+
+def test_a_failed_keychain_write_stops_setup_without_writing_the_secret_anywhere(tmp_path, monkeypatch, capsys):
+    Script(monkeypatch, {"Which agent": "2", "Install and start": "n"})
+    def refuse(*a, **k):
+        raise ValueError("Keychain item 'agent2telegramtopic.example_bot' could not be written")
+    monkeypatch.setattr(wizard.keychain, "write", refuse)
+    assert wizard.run(tmp_path, factory(updates=[[dm(7)]]), platform="darwin") == 1
+    assert "could not be written" in capsys.readouterr().out
+    assert not config_file(tmp_path).exists()

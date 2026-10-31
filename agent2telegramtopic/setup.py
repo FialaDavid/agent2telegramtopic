@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import service
+from . import keychain, service
 from .config import (config_file, hooks_settings_file, is_default_instance, lanes_root, pop_config_arg, save_config,
                      write_hooks_settings)
 from .skills import install_skill
@@ -151,12 +151,26 @@ def run(home: Path | None = None, client_factory=TelegramClient, platform: str =
         print("  ✗ No authorized user, nothing written. Re-run setup.")
         return 1
     bot = me.get("username")
-    raw = {"agent": agent, "token": token, "allowed_user_ids": [owner], "bot_username": bot}
+    raw = {"agent": agent, "allowed_user_ids": [owner], "bot_username": bot}
+    secrets = [("token", token, f"agent2telegramtopic.{bot}")]
     print("\n── Step 4/4 · Voice (optional) ──\n")
     if _yes("Enable voice notes via ElevenLabs (transcription and spoken replies)?"):
         key = _ask_secret("ElevenLabs API key (hidden)")
         if key:
-            raw["elevenlabs_api_key"] = key
+            secrets.append(("elevenlabs_api_key", key, f"agent2telegramtopic.{bot}.elevenlabs"))
+    for field, value, service_name in secrets:
+        what = "bot token" if field == "token" else "ElevenLabs key"
+        if platform == "darwin" and _yes(f"Store the {what} in the macOS Keychain instead of config.json?",
+                                         default_yes=True):
+            try:
+                keychain.write(service_name, None, value, platform=platform)
+            except ValueError as exc:
+                print(f"  ✗ {exc}. Nothing written. Re-run setup.")
+                return 1
+            raw[f"{field}_keychain"] = {"service": service_name}
+            print(f"  ✓ {what} stored in the Keychain item '{service_name}'")
+        else:
+            raw[field] = value
     path = save_config(raw, home)
     print(f"\n✓ Saved config to {path} (permissions 0600).")
     if agent == "claude-code":
