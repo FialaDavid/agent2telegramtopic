@@ -14,6 +14,19 @@ library.
 > `Ported from agent2telegram (MIT)` header; the topic multiplexer, durable queue, lane
 > lifecycle and the rest are new. See [License](#license).
 
+## What is different from Agent2Telegram
+
+- One Claude Code or Codex session per Telegram topic, each with its own working directory and
+  state; `max_live_lanes` limits how many run at once.
+- Incoming messages are written to a durable on-disk queue before delivery.
+- Idle sessions are compacted and parked, and resumed when their topic gets a message.
+- `/close` writes a summary of the topic to an archive and ends its session; a later message in the
+  topic resumes it. `/rename <name>` renames the topic.
+- Each bridge writes a status file (lanes, state, heartbeat) for external monitors such as
+  Agents Monitoring.
+- In Claude sessions the bridge sets its own `statusLine` command to record rate limits for
+  `/usage`; it replaces your statusline in those sessions.
+
 ## What you get
 
 - **A session per topic.** Each topic has its own agent session, working directory and state.
