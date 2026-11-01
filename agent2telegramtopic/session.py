@@ -58,6 +58,7 @@ _PASTE_CHIP_CHARS_RE = re.compile(r"\[pasted\b[^\]]*?(\d+)\s*chars?\]")
 # an isolated Codex 0.147.0: 0 normally, 1-2 when the message opens with a non-ASCII character.
 MAX_UNCHIPPED_LEAD = 8
 _BORDER_CHARS = "│┃|"
+# Pre-typing composer gates search back at most this many rows for the prompt.
 MAX_COMPOSER_LINES = 14
 # Dialogs known to be harmless to cancel, which Escape reliably closes. This list is NOT the
 # safety mechanism and adding entries to it protects nobody: whether the bridge may type is
@@ -385,11 +386,11 @@ class TmuxSession:
         a fresh silent loss. It now has to see the composer instead.
         """
         view = self._pane_view()
-        if self._composer_text(view) is not None:
+        if self._composer_text(view, reach=MAX_COMPOSER_LINES) is not None:
             return view
         if _pane_has_escapable_overlay(view.text) and self._dismiss_escapable_overlay():
             view = self._pane_view()
-            if self._composer_text(view) is not None:
+            if self._composer_text(view, reach=MAX_COMPOSER_LINES) is not None:
                 return view
         raise SessionError(
             f"{BLOCKED_BY_OVERLAY}: the composer in tmux session '{self.name}' does not have the "
@@ -398,7 +399,7 @@ class TmuxSession:
     def dialog_snapshot(self) -> tuple[str, bool]:
         """The pane text and whether the composer has the keyboard (False = a dialog is up)."""
         view = self._pane_view()
-        return view.text, self._composer_text(view) is not None
+        return view.text, self._composer_text(view, reach=MAX_COMPOSER_LINES) is not None
 
     def press_dialog_key(self, key: str) -> None:
         """Send ONE navigation key to a dialog the user chose to answer from Telegram."""
@@ -585,7 +586,7 @@ class TmuxSession:
         return PaneView(out, -1, None)
 
     @staticmethod
-    def _composer_text(view: PaneView) -> str | None:
+    def _composer_text(view: PaneView, *, reach: int | None = None) -> str | None:
         """The text sitting in the composer, or None when the composer has not got the keyboard.
 
         Positive identification, in this order:
@@ -608,7 +609,8 @@ class TmuxSession:
             row = max((i for i, ln in enumerate(lines) if _is_prompt_line(ln)), default=-1)
         if row < 0 or row >= len(lines):
             return None
-        start = next((i for i in range(row, max(-1, row - MAX_COMPOSER_LINES), -1)
+        first_row = 0 if reach is None else max(0, row - reach + 1)
+        start = next((i for i in range(row, first_row - 1, -1)
                       if _is_prompt_line(lines[i])), None)
         if start is None or _is_menu_item(lines[start]):
             return None

@@ -298,6 +298,31 @@ class OrdinaryMessagesStillGetThrough(unittest.TestCase):
         self.assertEqual(tmux.typed, [MESSAGE])
         self.assertEqual(tmux.keys.count("Enter"), 1)
 
+    def test_a_long_wrapped_message_in_a_220_column_pane_is_submitted(self):
+        message = "[TG] " + "deployment notes matter " * 171 + "end"
+        rows = textwrap.wrap(message, width=218, break_long_words=False)
+        self.assertGreaterEqual(len(rows), 19)
+        header = "Done\n────────────────────────\n"
+        tail = rows[0:]
+        held = PaneView(header + "❯ " + tail[0] + "\n" +
+                        "\n".join("  " + row for row in tail[1:]) +
+                        "\n────────────────────────\n",
+                        header.count("\n") + len(tail) - 1, True)
+        with _Harness(CLAUDE_EMPTY, on_keys={"type": held, "Enter": CLAUDE_EMPTY}) as tmux:
+            s = _session()
+            s._origin = ""
+            s._type_and_submit(message)
+        self.assertEqual("".join(tmux.typed), message)
+        self.assertEqual(tmux.keys.count("Enter"), 1)
+
+    def test_a_distant_prompt_is_not_typed_into_before_the_focus_gate(self):
+        text = "❯ stale prompt\n" + "output\n" * 29 + "cursor\n"
+        distant = PaneView(text, 30, True)
+        with _Harness(distant) as tmux:
+            with self.assertRaises(SessionError):
+                _session()._type_and_submit(MESSAGE)
+        self.assertEqual(tmux.typed, [])
+
     def test_a_codex_message_is_typed_once_and_submitted(self):
         with _Harness(CODEX_EMPTY, on_keys={"type": CODEX_HOLDS, "Enter": CODEX_EMPTY}) as tmux:
             _session()._type_and_submit(MESSAGE)
