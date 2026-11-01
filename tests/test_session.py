@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from agent2telegramtopic import session
 from agent2telegramtopic.session import (MAX_TMUX_INJECTION_CHARS, SessionError, TmuxSession,
@@ -89,13 +89,31 @@ class TmuxSessionSendKeysTests(unittest.TestCase):
         with patch.object(session, "_tmux", side_effect=tmux), patch.object(session.time, "sleep"):
             s = object.__new__(TmuxSession)
             s.name = "a2t-test"
-            s._origin = "from tg: "
+            s._origin = "[TG] "
             s._expected_agent_commands = ()
             s._send_keys("hello\x0bthere\x03\x1b[31m\x7fworld\x85!")
 
         literal_calls = [c for c in calls if c[:5] == ("send-keys", "-t", "a2t-test", "-l", "--")]
         self.assertEqual(len(literal_calls), 1)
-        self.assertEqual(literal_calls[0][-1], "from tg: hellothere[31mworld!")
+        self.assertEqual(literal_calls[0][-1], "[TG] hellothere[31mworld!")
+
+    def test_send_command_does_not_prepend_origin_prefix(self):
+        s = self._bare()
+        with (patch.object(TmuxSession, "alive", new_callable=PropertyMock, return_value=True),
+              patch.object(TmuxSession, "_pane_ok", return_value=(True, "")),
+              patch.object(TmuxSession, "_type_and_submit") as submit):
+            s._origin = "[TG] "
+            s.send_command("/compact")
+        submit.assert_called_once_with("/compact")
+
+    def test_inject_can_submit_without_origin_prefix(self):
+        s = self._bare()
+        with (patch.object(TmuxSession, "alive", new_callable=PropertyMock, return_value=True),
+              patch.object(TmuxSession, "_pane_ok", return_value=(True, "")),
+              patch.object(TmuxSession, "_type_and_submit") as submit):
+            s._origin = "[TG] "
+            s.inject("/compact", origin_prefix=False)
+        submit.assert_called_once_with("/compact")
 
     def test_send_keys_collapses_newlines_to_one_literal_submit(self):
         calls = []

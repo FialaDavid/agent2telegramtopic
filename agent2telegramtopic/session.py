@@ -364,7 +364,7 @@ class TmuxSession:
             time.sleep(0.4)
         return not _pane_has_escapable_overlay(self._capture())
 
-    def _send_keys(self, text: str) -> None:
+    def _send_keys(self, text: str, origin_prefix: bool = True) -> None:
         ok, detail = self._pane_ok()
         if not ok:
             # Fail closed: if the agent has crashed back to a shell, Enter would execute the
@@ -373,7 +373,7 @@ class TmuxSession:
             raise SessionError(f"refusing to inject into tmux session '{self.name}': {detail}")
         text = sanitize_for_tmux(text)
         text = " ".join(text.splitlines())                 # one Enter submits everything
-        if self._origin:
+        if origin_prefix and self._origin:
             text = f"{self._origin}{text}"
         self._type_and_submit(text)
 
@@ -685,12 +685,12 @@ class TmuxSession:
     def _capture(self) -> str:
         return _tmux("capture-pane", "-p", "-t", self.name, check=False).stdout
 
-    def inject(self, text: str) -> None:
+    def inject(self, text: str, origin_prefix: bool = True) -> None:
         """Fire-and-forget: type the message into the session, don't wait for a reply.
         Used by the async attach bridge (outbound is handled separately)."""
         if not self.alive:
             raise SessionError(f"agent session '{self.name}' is gone")
-        self._send_keys(text)
+        self._send_keys(text, origin_prefix=origin_prefix)
 
     def send(self, text: str) -> str:
         if not self.alive:

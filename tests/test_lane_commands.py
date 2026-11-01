@@ -10,8 +10,9 @@ import pytest
 
 from agent2telegramtopic.lane import BOT_COMMANDS, LaneBridge
 from agent2telegramtopic.routing import LaneKey, reply_params
-from agent2telegramtopic.session import BLOCKED_BY_OVERLAY
+from agent2telegramtopic.session import BLOCKED_BY_OVERLAY, SessionError
 from agent2telegramtopic import app as app_module
+from agent2telegramtopic import lane as lane_module
 
 
 class FakeTelegram:
@@ -35,14 +36,22 @@ class FakeSession:
         self.error = error
         self.commands = []
         self.injected = []
+        self.prefix_flags = []
+        self.agent_alive = True
 
     def send_command(self, text):
         if self.error:
             raise self.error
         self.commands.append(text)
 
-    def inject(self, text):
+    def inject(self, text, origin_prefix=True):
+        if not self.agent_alive:
+            raise SessionError("refusing to inject: agent is gone")
         self.injected.append(text)
+        self.prefix_flags.append(origin_prefix)
+
+    def _pane_ok(self):
+        return self.agent_alive, "agent is gone"
 
 
 def make_lane(tmp_path, key=LaneKey(44, 12), agent="claude-code", on_close=None, client=None):
@@ -91,6 +100,145 @@ def submit(lane, update_id, text):
     lane._submit_inbound_update(inbox.pending()[0].update, record_id)
     lane._inbound_queue.join()
     return inbox, record_id
+
+
+@pytest.mark.parametrize("agent", ["claude-code", "codex"])
+@pytest.mark.parametrize("command", ["/compact", "/cost"])
+def test_unknown_slash_command_is_submitted_without_origin_prefix(tmp_path, agent, command):
+    lane, tg = make_lane(tmp_path, agent=agent)
+    update = {"message": {"text": command, "message_id": 1}}
+
+    assert lane._handle(update)
+    deadline = time.monotonic() + 1
+    while not lane._session.injected and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert lane._session.injected == [command]
+    assert lane._session.prefix_flags == [False]
+    assert lane._turn_active.is_set()
+
+    lane._finish_turn()
+    assert not lane._turn_active.is_set()
+    assert not lane._internal_turn
+    assert tg.messages[0][1] == f"↪️ {command} sent to the agent"
+
+    assert lane._handle({"message": {"text": "hello", "message_id": 2}})
+    assert lane._session.injected == [command, "hello"]
+    assert lane._session.prefix_flags == [False, True]
+    lane._turn_active.clear()
+    lane._stop.set()
+
+
+def test_passthrough_reply_forwards_and_turn_is_not_internal_timeout(tmp_path, monkeypatch):
+    lane, tg = make_lane(tmp_path)
+    monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.001)
+    assert lane._handle({"message": {"text": "/compact", "message_id": 1}})
+    time.sleep(0.01)
+    assert lane._turn_active.is_set()
+    assert lane._session.agent_alive
+    assert not lane._internal_turn
+
+    lane._handle_event(SimpleNamespace(kind="user", text="/compact"))
+    lane._handle_event(SimpleNamespace(kind="text", text="Compacted.", final=True, key="reply-1"))
+    lane._flush_pending()
+    assert any(message[1] == "Compacted." for message in tg.messages)
+    assert lane._turn_text_sent
+
+    lane._handle_event(SimpleNamespace(kind="turn_end", text="", final=True, key=""))
+    lane.outbound_tick()
+    assert not lane._turn_active.is_set()
+    assert not lane._internal_turn
+    assert lane._handle({"message": {"text": "next", "message_id": 2}})
+    assert lane._session.injected == ["/compact", "next"]
+    lane._turn_active.clear()
+    lane._stop.set()
+
+
+def test_claude_passthrough_ends_on_compact_done_and_acknowledges(tmp_path, monkeypatch):
+    lane, tg = make_lane(tmp_path)
+    assert lane._handle({"message": {"text": "/compact", "message_id": 1}})
+    lane._maybe_reresolve = lambda: None
+    lane._flush_pending = lambda: None
+    lane._drain_transcript = lambda: None
+    lane._drain_signal = lambda: None
+    lane._compact_done.parent.mkdir(parents=True, exist_ok=True)
+    lane._compact_done.touch()
+
+    lane.outbound_tick()
+
+    assert not lane._turn_active.is_set()
+    assert not lane._compact_done.exists()
+    assert tg.messages[-1][1] == "↪️ /compact sent to the agent"
+    lane._stop.set()
+
+
+def test_claude_passthrough_ends_on_local_command_stdout(tmp_path):
+    lane, tg = make_lane(tmp_path)
+    assert lane._handle({"message": {"text": "/cost", "message_id": 1}})
+    lane._transcript = tmp_path / "transcript.jsonl"
+    lane._transcript.write_text(json.dumps({"type": "user", "message": {
+        "content": "<local-command-stdout>$0.25</local-command-stdout>"}}) + "\n")
+    lane._tpos = 0
+    lane._maybe_reresolve = lambda: None
+    lane._flush_pending = lambda: None
+    lane._drain_signal = lambda: None
+
+    lane.outbound_tick()
+
+    assert not lane._turn_active.is_set()
+    assert tg.messages[-1][1] == "↪️ /cost sent to the agent"
+    lane._stop.set()
+
+
+def test_passthrough_state_belongs_to_its_own_turn(tmp_path, monkeypatch):
+    lane, tg = make_lane(tmp_path)
+    assert lane._handle({"message": {"text": "normal", "message_id": 1}})
+    assert lane._handle({"message": {"text": "/x", "message_id": 2}})
+    assert lane._passthrough_command == ""
+    lane._has_turn_end_backstop_source = lambda: True
+    lane._retry_last_assistant_text = lambda: "normal turn answer"
+    lane._owner_chat = lane.key.chat_id
+    lane._turn_from_tg = True
+    lane._turn_text_sent = False
+    lane._turn_is_reaction = False
+    backstop = []
+    lane._send_final = lambda text, **kwargs: backstop.append(text)
+    lane._turn_active.set()
+    lane._finish_turn()
+    assert backstop == ["normal turn answer"]
+
+    assert lane._handle({"message": {"text": "/compact", "message_id": 3}})
+    assert lane._handle({"message": {"text": "steering", "message_id": 4}})
+    assert lane._passthrough_command == ""
+    lane._finish_turn()
+    assert "↪️ /compact sent to the agent" not in [message[1] for message in tg.messages]
+    lane._stop.set()
+
+
+@pytest.mark.parametrize("text", ["/Users/a/b.txt look", "/ ahoj"])
+def test_path_like_or_spaced_slash_message_keeps_origin_prefix(tmp_path, text):
+    lane, _ = make_lane(tmp_path)
+    assert lane._handle({"message": {"text": text, "message_id": 1}})
+    assert lane._session.injected == [text]
+    assert lane._session.prefix_flags == [True]
+    lane._turn_active.clear()
+    lane._stop.set()
+
+
+@pytest.mark.parametrize("command", ["/new", "/close", "/usage", "/status"])
+def test_bridge_commands_are_consumed_not_passed_through(tmp_path, command):
+    lane, _ = make_lane(tmp_path)
+    lane._status_text = lambda _agent: "status"
+    lane._usage_text = lambda _agent: "usage"
+    assert lane._handle({"message": {"text": command, "message_id": 1}})
+    if command == "/new":
+        deadline = time.monotonic() + 1
+        while not lane._session.commands and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert lane._session.commands == ["/clear"]
+    else:
+        assert lane._session.commands == []
+    assert lane._session.injected == []
+    lane._stop.set()
 
 
 @pytest.mark.parametrize("agent,command", [("claude-code", "/clear"), ("codex", "/new")])
@@ -167,12 +315,36 @@ def test_close_without_working_callback_notifies_once(tmp_path, callback, caplog
     lane._stop.set()
 
 
-def test_unknown_command_is_forwarded_as_normal_text(tmp_path):
+def test_unknown_command_is_injected_without_prefix(tmp_path):
     lane, _ = make_lane(tmp_path)
     inbox, _ = submit(lane, 5, "/foo bar")
+    deadline = time.monotonic() + 1
+    while not lane._session.injected and time.monotonic() < deadline:
+        time.sleep(0.005)
     assert lane._session.injected == ["/foo bar"]
+    assert lane._session.prefix_flags == [False]
     assert lane._turn_from_tg is True
+    lane._finish_turn()
     assert inbox.pending() == []
+    lane._stop.set()
+
+
+def test_exit_ends_passed_through_turn_but_next_message_cannot_resume(tmp_path):
+    lane, _ = make_lane(tmp_path)
+    assert lane._handle({"message": {"text": "/exit", "message_id": 6}})
+    deadline = time.monotonic() + 1
+    while not lane._session.injected and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert lane._session.injected == ["/exit"]
+
+    lane._session.agent_alive = False
+    assert not lane._session._pane_ok()[0]
+    lane._finish_turn()
+    assert not lane._turn_active.is_set()
+
+    assert not lane._handle({"message": {"text": "hello", "message_id": 7}})
+    assert lane._session.injected == ["/exit"]
+    assert not lane._turn_active.is_set()
     lane._stop.set()
 
 

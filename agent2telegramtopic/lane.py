@@ -308,6 +308,7 @@ class LaneBridge:
         self._seen_tools = set()
         self._tui_seen: set = set()          # Codex TUI scrape: tool lines already shown this turn
         self._turn_text_sent = False
+        self._passthrough_command = ""
         self._turn_is_reaction = False       # turn opened by a reaction → exempt from the backstop
         self._reaction_seen: dict = {}   # (chat, msg, emoji) -> first reaction timestamp
         self._turn_error = ""
@@ -632,10 +633,32 @@ class LaneBridge:
 
         message = upd.get("message") or upd.get("edited_message") or {}
         text0 = (message.get("text") or "").strip()
-        if text0.startswith("/") and not (message.get("voice") or message.get("audio")
-                                           or message.get("photo") or message.get("document")):
+        first_token = text0.split(maxsplit=1)[0] if text0 else ""
+        if (text0.startswith("/") and not (message.get("voice") or message.get("audio")
+                                           or message.get("photo") or message.get("document"))):
             if self._handle_command(text0, self.key.chat_id, message.get("message_id")):
                 return True
+            if re.fullmatch(r"/[A-Za-z0-9_:-]+", first_token):
+                command = " ".join(text0.splitlines())
+                if command:
+                    try:
+                        was_active = self._turn_active.is_set()
+                        self._begin_turn()
+                        if not was_active:
+                            self._passthrough_command = command
+                        delivered = self._inject(command, origin_prefix=False)
+                        if not delivered:
+                            self._turn_active.clear()
+                            self._passthrough_command = ""
+                            if self._lane_store is not None:
+                                self._lane_store.set_busy(self.key, False)
+                        return delivered
+                    except BaseException:
+                        self._turn_active.clear()
+                        self._passthrough_command = ""
+                        if self._lane_store is not None:
+                            self._lane_store.set_busy(self.key, False)
+                        raise
         text = (message.get("text") or message.get("caption") or "").strip()
         if message.get("voice") or message.get("audio"):
             text = self._transcribe(message.get("voice") or message.get("audio"), self.key.chat_id) or text
@@ -648,6 +671,8 @@ class LaneBridge:
                 return True
             text = f"{text}\n{note}".strip()
         if text:
+            if self._turn_active.is_set() and self._passthrough_command:
+                self._passthrough_command = ""
             text = self._prepend_reply_context(message, text)
         # Match a2t's attach.py: hint insertion and injection are both conditional on
         # actual user text. An empty text/caption must not become a prompt by itself.
@@ -1050,14 +1075,17 @@ class LaneBridge:
         return None
 
     # Ported from agent2telegram attach.py:1808 (MIT).
-    def _inject(self, text: str) -> bool:
+    def _inject(self, text: str, origin_prefix: bool = True) -> bool:
         # Delta (a): Claude pin-probe arming/clearing is omitted because lane identity is assigned.
         self._turn_active.set()
         self._last_activity = time.monotonic()
         last_error: Exception | None = None
         for attempt in range(1, INJECT_ATTEMPTS + 1):
             try:
-                self._session.inject(text)
+                if origin_prefix:
+                    self._session.inject(text)
+                else:
+                    self._session.inject(text, origin_prefix=False)
                 if attempt > 1:
                     log.info("inject succeeded on attempt %d", attempt)
                 return True
@@ -1464,6 +1492,12 @@ class LaneBridge:
                     # Compaction transcript records are private until its matching completion.
                     continue
                 self._rec_live = self._record_is_live(rec_off, rec)
+                if (self.agent == "claude-code" and self._passthrough_command
+                        and self._turn_active.is_set() and rec.get("type") == "user"
+                        and "<local-command-stdout>" in json.dumps(rec, ensure_ascii=False)):
+                    self._tpos += consumed
+                    self._pending_turn_end = True
+                    return
                 if (self._internal_turn and self._internal_kind == "compact"
                         and self.agent == "claude-code" and rec.get("type") == "system"
                         and rec.get("subtype") == "local_command"
@@ -1659,10 +1693,11 @@ class LaneBridge:
         self._status_clear()
         was_active = self._turn_active.is_set()
         internal = self._internal_turn
+        passthrough_command = self._passthrough_command
         from_tg_at_end = self._turn_from_tg
         text_sent_at_end = self._turn_text_sent
         reaction_at_end = self._turn_is_reaction
-        if (not internal and was_active and self._turn_from_tg and not self._turn_text_sent
+        if (not internal and not passthrough_command and was_active and self._turn_from_tg and not self._turn_text_sent
                 and not self._turn_is_reaction
                 and self._owner_chat is not None and getattr(self, "_turn_end_backstop_enabled", True)):
             source = "transcript"
@@ -1689,12 +1724,12 @@ class LaneBridge:
                 self._send_final(
                     "⚠️ The agent ended this turn without an answer. Please send your message again.",
                     turn_text=False)
-        elif (not internal and was_active and self._turn_from_tg and not self._turn_text_sent
+        elif (not internal and not passthrough_command and was_active and self._turn_from_tg and not self._turn_text_sent
                 and self._owner_chat is not None
                 and not self._turn_is_reaction):
             log.error("TURN END: Telegram turn ended unanswered and the backstop did not run (backstop_enabled=%s)",
                       getattr(self, "_turn_end_backstop_enabled", True))
-        elif (not internal and was_active and self._turn_is_reaction
+        elif (not internal and not passthrough_command and was_active and self._turn_is_reaction
                 and not self._turn_text_sent):
             # Intended silence, but it must still be visible in the log — otherwise a genuinely
             # lost reply would look exactly the same in the daily traffic analysis.
@@ -1707,6 +1742,13 @@ class LaneBridge:
                 tokens = self._internal_context_tokens()
                 if tokens is not None:
                     self._lane_store.set_ctx_tokens(self.key, tokens)
+        if passthrough_command and not self._turn_text_sent:
+            try:
+                self.tg.send_message(self.key.chat_id,
+                                     f"↪️ {passthrough_command} sent to the agent")
+            except Exception as exc:
+                log.warning("could not acknowledge passed-through command: %s", type(exc).__name__)
+        self._passthrough_command = ""
         if internal:
             if self._internal_kind == "compact" and self._internal_compaction_succeeded:
                 self._record_internal_compaction()
@@ -2155,9 +2197,17 @@ class LaneBridge:
                 self._consume_signal_text()
             else:
                 self._drain_signal()
-            if (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "compact"
-                    and self._compact_done.exists()):
-                self._finish_turn()
+            if (self.agent == "claude-code" and self._compact_done.exists()
+                    and ((self._internal_turn and self._internal_kind == "compact")
+                         or (self._passthrough_command and self._turn_active.is_set()))):
+                try:
+                    self._compact_done.unlink()
+                except OSError:
+                    pass
+                if self._passthrough_command and self._turn_active.is_set():
+                    self._end_turn()
+                else:
+                    self._finish_turn()
             elif (self._internal_turn and self.agent == "claude-code" and self._internal_kind == "summary"
                     and self._turn_end is not None and self._turn_end.exists()):
                 self._end_turn()
