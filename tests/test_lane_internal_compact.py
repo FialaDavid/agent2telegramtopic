@@ -500,6 +500,19 @@ def test_summary_error_discards_partial_private_text(tmp_path):
     assert bridge._summary_error == "upstream failed"
 
 
+def test_summary_keeps_reader_marked_final_answer_over_commentary(tmp_path):
+    from agent2telegramtopic.readers import Ev
+
+    bridge = LaneBridge(Telegram(), LaneKey(1, 15), tmp_path / "sent", tmp_path / "queue",
+                        agent="codex", session=Session())
+    bridge._internal_turn = True
+    bridge._internal_kind = "summary"
+    bridge._handle_event(Ev("text", "commentary", final=False))
+    bridge._handle_event(Ev("text", "final summary", final=True))
+    bridge._handle_event(Ev("text", "later nonfinal text", final=False))
+    assert bridge._summary_text == "final summary"
+
+
 def test_internal_timeout_does_not_retire_lane_owned_by_close(tmp_path):
     retired = []
     session = Session()

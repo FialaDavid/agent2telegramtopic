@@ -353,6 +353,7 @@ class LaneBridge:
         self._internal_kind = "compact"
         self._summary_text = ""
         self._summary_error = None
+        self._summary_final_seen = False
         self._internal_turn_done = threading.Event()
         self._internal_lock = threading.RLock()
         self._internal_deadline = None
@@ -951,6 +952,7 @@ class LaneBridge:
             self._internal_kind = kind
             self._summary_text = ""
             self._summary_error = None
+            self._summary_final_seen = False
             if self._compact_done:
                 try:
                     self._compact_done.unlink()
@@ -1511,7 +1513,11 @@ class LaneBridge:
                     self._summary_error = ev.text or "summary turn failed"
                     self._summary_text = ""
                 elif ev.kind == "text" and ev.text.strip() and not self._summary_error:
-                    self._summary_text = ev.text.strip()
+                    if ev.final:
+                        self._summary_text = ev.text.strip()
+                        self._summary_final_seen = True
+                    elif not self._summary_final_seen:
+                        self._summary_text = ev.text.strip()
             return
         if self._owner_chat is None:
             return
