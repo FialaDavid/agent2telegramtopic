@@ -711,6 +711,10 @@ class LaneBridge:
         arg = parts[1].strip() if len(parts) > 1 else ""
         labels = {"codex": "Codex", "claude-code": "Claude Code"}
         agent = labels.get(self.agent, self.agent or "agent")
+        if cmd in ("exit", "quit"):
+            self.tg.send_message(chat_id,
+                f"⛔ {parts[0].split('@')[0]} is not passed to the agent from Telegram — it would leave this topic without a session. Use /close to end the session (writing again resumes it) or /new for a fresh conversation.")
+            return True
         if cmd in ("start", "help"):
             voice = "on" if self._elevenlabs_key() else "off — enable with /setkey"
             self.tg.send_message(chat_id,

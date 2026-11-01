@@ -128,6 +128,20 @@ def test_unknown_slash_command_is_submitted_without_origin_prefix(tmp_path, agen
     lane._stop.set()
 
 
+@pytest.mark.parametrize("command", ["/exit", "/quit", "/exit@SomeBot"])
+def test_exit_and_quit_are_blocked_from_agent(tmp_path, command):
+    lane, tg = make_lane(tmp_path)
+
+    assert lane._handle({"message": {"text": command, "message_id": 1}})
+
+    assert lane._session.injected == []
+    assert tg.messages[-1][1] == (
+        f"⛔ {command.split('@')[0]} is not passed to the agent from Telegram — "
+        "it would leave this topic without a session. Use /close to end the session "
+        "(writing again resumes it) or /new for a fresh conversation."
+    )
+
+
 def test_passthrough_reply_forwards_and_turn_is_not_internal_timeout(tmp_path, monkeypatch):
     lane, tg = make_lane(tmp_path)
     monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.001)
@@ -329,22 +343,17 @@ def test_unknown_command_is_injected_without_prefix(tmp_path):
     lane._stop.set()
 
 
-def test_exit_ends_passed_through_turn_but_next_message_cannot_resume(tmp_path):
-    lane, _ = make_lane(tmp_path)
+def test_exit_is_blocked_and_next_message_can_still_reach_agent(tmp_path):
+    lane, tg = make_lane(tmp_path)
     assert lane._handle({"message": {"text": "/exit", "message_id": 6}})
+    assert lane._session.injected == []
+    assert tg.messages[-1][1].startswith("⛔ /exit is not passed to the agent")
+
+    assert lane._handle({"message": {"text": "hello", "message_id": 7}})
     deadline = time.monotonic() + 1
     while not lane._session.injected and time.monotonic() < deadline:
         time.sleep(0.005)
-    assert lane._session.injected == ["/exit"]
-
-    lane._session.agent_alive = False
-    assert not lane._session._pane_ok()[0]
-    lane._finish_turn()
-    assert not lane._turn_active.is_set()
-
-    assert not lane._handle({"message": {"text": "hello", "message_id": 7}})
-    assert lane._session.injected == ["/exit"]
-    assert not lane._turn_active.is_set()
+    assert lane._session.injected == ["hello"]
     lane._stop.set()
 
 
