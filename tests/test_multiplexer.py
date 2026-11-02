@@ -34,7 +34,7 @@ class Client:
             self.on_last_poll()
         return batch
 
-    def send_message(self, *args):
+    def send_message(self, *args, **kwargs):
         self.sent.append(args)
 
     def send_chat_action(self, *args):
@@ -72,6 +72,73 @@ def make_mux(tmp_path, client, lanes=None):
     mux = Multiplexer(client, {8}, tmp_path / "bot", factory,
                       lane_states_root=tmp_path / "bot" / "lanes")
     return mux, lanes
+
+
+def test_restart_control_posts_notice_and_parks_live_lane(tmp_path):
+    from agent2telegramtopic.state import Lane, LaneStore
+
+    class RestartableSession(FakeSession):
+        alive = True
+
+        def close(self):
+            self.alive = False
+
+    key = LaneKey(123, 28)
+    client = Client()
+    store = LaneStore(tmp_path / "lanes.db")
+    store.upsert(Lane(123, 28, "topic 28", "claude-code", "resume-id", "live", True, 1, None, 0))
+    session = RestartableSession()
+    lane = LaneBridge(client, key, tmp_path / "sent", tmp_path / "queue",
+                      agent="claude-code", session=session, lane_store=store,
+                      on_parked=lambda parked: store.set_status(parked, "parked"))
+    lane._turn_active.set()
+    mux = Multiplexer(client, {8}, tmp_path / "bot", lambda lane_key: lane,
+                      lane_states_root=tmp_path / "bot" / "lanes", lane_store=store)
+    root = tmp_path / "bot" / "control"
+    root.mkdir(parents=True)
+    (root / "restart.json").write_text(json.dumps({
+        "action": "restart", "chat": 123, "thread": 28, "requested_at": 1,
+    }))
+    control_thread = threading.Thread(target=mux._control_loop)
+    control_thread.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and store.get(key).status != "waiting":
+        time.sleep(0.01)
+    mux._stop.set()
+    control_thread.join(2)
+
+    assert not session.alive
+    assert store.get(key).status == "waiting" and store.get(key).busy is False
+    assert mux._slot_wakeup.is_set()
+    assert client.sent[0][1] == "🔄 Session restarted from the dashboard (the conversation continues)."
+    assert not (root / "restart.json").exists()
+    store._db.close()
+
+
+def test_restart_notice_failure_does_not_prevent_kill(tmp_path):
+    class BrokenNoticeClient(Client):
+        def send_message(self, *args, **kwargs):
+            raise RuntimeError("send failed")
+
+    client = BrokenNoticeClient()
+    mux, _ = make_mux(tmp_path, client)
+    calls = []
+    mux._restart_lane(LaneKey(123, 29), type("Lane", (), {
+        "restart_session": lambda self: calls.append("restart") or True,
+    })())
+    assert calls == ["restart"]
+    assert mux._slot_wakeup.is_set()
+
+
+def test_restart_kill_failure_posts_warning_and_does_not_wake(tmp_path):
+    client = Client()
+    mux, _ = make_mux(tmp_path, client)
+    mux._restart_lane(LaneKey(123, 30), type("Lane", (), {
+        "restart_session": lambda self: False,
+    })())
+    assert len(client.sent) == 2
+    assert client.sent[1][1] == "⚠️ Restart failed: the session did not stop."
+    assert not mux._slot_wakeup.is_set()
 
 
 def test_crash_between_reserve_and_offset_save_replays_without_loss(tmp_path):

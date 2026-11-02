@@ -89,6 +89,9 @@ Other `/commands` are passed through to the agent.
 To hand a message to a topic's agent from a local automation, run
 `agent2telegramtopic send --thread ID [--chat ID] (--text TEXT | --text-file PATH)`.
 The bridge posts the message in the topic and delivers it through that lane's inbound queue.
+To archive a topic from local automation, run `agent2telegramtopic close --thread ID [--chat ID]`.
+To restart a topic's agent session from local automation while keeping the conversation, run
+`agent2telegramtopic restart --thread ID [--chat ID]`.
 
 ## Requirements
 

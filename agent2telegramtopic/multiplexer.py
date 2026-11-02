@@ -122,12 +122,36 @@ class Multiplexer:
                                 self.lane_store.set_status(key, "waiting")
                                 self.lane_store.set_busy(key, False)
                                 self._slot_wakeup.set()
+                    elif action == "restart":
+                        requested_at = request.get("requested_at")
+                        if type(requested_at) not in (int, float):
+                            raise ValueError("invalid restart request")
+                        if row.status != "live":
+                            self.log.info("ignoring restart request for non-live lane %s", key)
+                            continue
+                        threading.Thread(target=self._restart_lane, args=(key, lane), daemon=True).start()
                     else:
                         raise ValueError("invalid control request")
                 except ValueError as exc:
                     self.log.warning("ignoring malformed control request %s: %s", path.name, exc)
                 except Exception:
                     self.log.exception("could not process control request %s", path.name)
+
+    def _restart_lane(self, key, lane):
+        try:
+            self.client.send_message(key, "🔄 Session restarted from the dashboard (the conversation continues).",
+                                     parse_mode=None)
+        except Exception:
+            self.log.exception("could not post restart notice for %s", key)
+        restart = getattr(lane, "restart_session", None)
+        if not callable(restart) or not restart():
+            self.log.error("restart failed for %s: the session did not stop", key)
+            try:
+                self.client.send_message(key, "⚠️ Restart failed: the session did not stop.", parse_mode=None)
+            except Exception:
+                self.log.exception("could not post restart failure notice for %s", key)
+            return
+        self._slot_wakeup.set()
 
     def _idle_watcher_loop(self):
         from .watcher import IdleWatcher

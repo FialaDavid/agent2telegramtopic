@@ -33,6 +33,50 @@ def write_send(bot_name, chat, thread, text, home=None):
     return path
 
 
+def write_restart(bot_name, chat, thread, home=None):
+    root = control_dir(bot_name, home)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / (uuid.uuid4().hex + ".json")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"action": "restart", "chat": chat, "thread": thread,
+                                     "requested_at": time.time()}), encoding="utf-8")
+    os.replace(temporary, path)
+    return path
+
+
+def restart_main(argv):
+    import argparse
+    from .config import build_config, load_config, state_db_path
+    from .state import LaneStore
+    parser = argparse.ArgumentParser(prog="agent2telegramtopic restart")
+    parser.add_argument("--thread", type=int, required=True)
+    parser.add_argument("--chat", type=int)
+    args = parser.parse_args(argv)
+    try:
+        raw = load_config()
+        cfg = build_config(raw)
+        store = LaneStore(state_db_path(cfg.bot_name))
+        try:
+            rows = [row for row in store.list_all() if row.thread_id == args.thread]
+            if args.chat is not None:
+                rows = [row for row in rows if row.chat_id == args.chat]
+            if len(rows) != 1:
+                print("lane is missing or thread does not identify exactly one non-archived lane")
+                return 2
+            row = rows[0]
+            if row.status != "live":
+                print("lane is not running")
+                return 2
+            write_restart(cfg.bot_name, row.chat_id, row.thread_id)
+        finally:
+            store._db.close()
+        print(f"restart requested for thread {row.thread_id}")
+        return 0
+    except (ValueError, OSError) as exc:
+        print(str(exc))
+        return 2
+
+
 def close_main(argv):
     import argparse
     from .config import build_config, load_config, state_db_path

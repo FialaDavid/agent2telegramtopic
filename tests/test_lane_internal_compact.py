@@ -529,3 +529,63 @@ def test_internal_timeout_does_not_retire_lane_owned_by_close(tmp_path):
     bridge._expire_internal_turn(done)
     assert done.is_set()
     assert retired == []
+
+
+def test_restart_kills_without_waiting_and_parks_for_resume(tmp_path):
+    from agent2telegramtopic.state import Lane, LaneStore
+
+    class RestartSession(Session):
+        alive = True
+
+        def close(self):
+            self.alive = False
+
+    key = LaneKey(1, 18)
+    store = LaneStore(tmp_path / "lanes.db")
+    store.upsert(Lane(1, 18, "topic 18", "codex", "same-session", "live", True, 1, None, 0))
+    session = RestartSession()
+    bridge = LaneBridge(Telegram(), key, tmp_path / "sent", tmp_path / "queue",
+                        agent="codex", session=session, lane_store=store,
+                        on_parked=lambda parked: store.set_status(parked, "parked"))
+    bridge._turn_active.set()
+    bridge._internal_turn = True
+    assert bridge.restart_session()
+    row = store.get(key)
+    assert not session.alive
+    assert bridge._stop.is_set()
+    assert not bridge._turn_active.is_set()
+    assert row.status == "waiting" and row.busy is False
+    store._db.close()
+
+
+def test_restart_reports_session_that_remains_alive(tmp_path):
+    session = Session()
+    session.alive = True
+    session.close = lambda: None
+    bridge = LaneBridge(Telegram(), LaneKey(1, 19), tmp_path / "sent", tmp_path / "queue",
+                        agent="codex", session=session)
+    bridge._turn_active.set()
+    assert not bridge.restart_session()
+    assert bridge._turn_active.is_set()
+    assert not bridge._stop.is_set()
+
+
+def test_restart_replays_durable_inbound_record_on_resumed_bridge(tmp_path):
+    key = LaneKey(1, 20)
+    old_session = Session()
+    old_session.alive = True
+    old_session.close = lambda: setattr(old_session, "alive", False)
+    old = LaneBridge(Telegram(), key, tmp_path / "sent", tmp_path / "queue",
+                     agent="codex", session=old_session)
+    old.store_control_text("queued before restart", 8)
+    assert old.restart_session()
+
+    resumed_session = Session()
+    resumed_session.alive = True
+    resumed = LaneBridge(Telegram(), key, tmp_path / "sent", tmp_path / "queue",
+                         agent="codex", session=resumed_session)
+    resumed._replay_pending_inbound()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not resumed_session.injected:
+        time.sleep(0.01)
+    assert resumed_session.injected == ["queued before restart"]

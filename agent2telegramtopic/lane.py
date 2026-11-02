@@ -1152,33 +1152,50 @@ class LaneBridge:
             if self._transcript and self._transcript.exists():
                 self._tpos = self._transcript.stat().st_size
             try:
-                if self._session is not None:
-                    try:
-                        self._session.close()
-                    except Exception as exc:
-                        log.error("could not close timed-out lane session: %s", type(exc).__name__)
-                alive_check = getattr(self._session, "alive", None) if self._session is not None else None
-                alive = bool(alive_check() if callable(alive_check) else alive_check)
-                if alive:
+                if not self._kill_and_park("timed-out lane"):
                     log.error("timed-out lane session is still alive; holding inbound injection")
                     self._stop.set()
                     return
-                if self._on_parked is not None and not self._closing:
-                    try:
-                        self._on_parked(self.key)
-                    except Exception as exc:
-                        log.error("could not persist timed-out lane as parked: %s", type(exc).__name__)
-                self._stop.set()
                 # A timeout is not a completed compaction: clear turn bookkeeping without
                 # persisting last_compact/context as a successful result.
-                self._turn_active.clear()
-                self._turn_from_tg = False
-                self._internal_turn = False
-                self._internal_deadline = None
             finally:
                 # Release waiters even when close/check/callback fails. _internal_timed_out
                 # keeps the inbound worker from injecting into an uncertain session.
                 done.set()
+
+    def _kill_and_park(self, description: str) -> bool:
+        if self._session is not None:
+            try:
+                self._session.close()
+            except Exception as exc:
+                log.error("could not close %s session: %s", description, type(exc).__name__)
+        alive_check = getattr(self._session, "alive", None) if self._session is not None else None
+        alive = bool(alive_check() if callable(alive_check) else alive_check)
+        if alive:
+            return False
+        if self._on_parked is not None and not self._closing:
+            try:
+                self._on_parked(self.key)
+            except Exception as exc:
+                log.error("could not persist %s as parked: %s", description, type(exc).__name__)
+        self._stop.set()
+        self._turn_active.clear()
+        self._turn_from_tg = False
+        self._internal_turn = False
+        self._internal_deadline = None
+        return True
+
+    def restart_session(self) -> bool:
+        """Kill this session and park the lane for an immediate resume."""
+        with self._internal_lock:
+            self._internal_timed_out = True
+            if not self._kill_and_park("restarted lane"):
+                self._internal_timed_out = False
+                return False
+            if self._lane_store is not None:
+                self._lane_store.set_status(self.key, "waiting")
+                self._lane_store.set_busy(self.key, False)
+            return True
 
     # Ported from agent2telegram attach.py::_limit_inbound_prompt (MIT).
     def _limit_inbound_prompt(self, text: str, chat_id: int) -> str | None:
