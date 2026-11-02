@@ -70,6 +70,7 @@ BACKSTOP_RETRY_ATTEMPTS = 5
 BACKSTOP_RETRY_DELAY = 0.35
 BACKSTOP_TURN_GRACE = 5.0
 TYPING_INTERVAL = 1.5
+SILENCE_NOTICE_S = 300.0  # below IDLE_DONE_HOOKED, which ends a silent turn
 OUTBOUND_TICK = 0.15
 OUTBOX_MAX_ATTEMPTS = 3
 IDLE_DONE = 90.0
@@ -219,11 +220,20 @@ class LaneTelegram:
 
     def send_message(self, chat, text, **kwargs):
         del chat
-        return self._record(self.client.send_message(self.key, text, **kwargs))
+        result = self._record(self.client.send_message(self.key, text, **kwargs))
+        self._activity()
+        return result
+
+    def _activity(self):
+        callback = getattr(self, "on_send", None)
+        if callback:
+            callback()
 
     def send_plain_id(self, chat, text, **kwargs):
         del chat
-        return self._record(self.client.send_plain_id(self.key, text, **kwargs))
+        result = self._record(self.client.send_plain_id(self.key, text, **kwargs))
+        self._activity()
+        return result
 
     def edit_plain(self, chat, message_id, text, **kwargs):
         del chat
@@ -235,7 +245,9 @@ class LaneTelegram:
 
     def send_inline_keyboard(self, chat, text, rows):
         del chat
-        return self._record(self.client.send_inline_keyboard(self.key, text, rows))
+        result = self._record(self.client.send_inline_keyboard(self.key, text, rows))
+        self._activity()
+        return result
 
     def edit_clear_keyboard(self, chat, message_id, text):
         del chat
@@ -243,11 +255,15 @@ class LaneTelegram:
 
     def send_file(self, chat, path, **kwargs):
         del chat
-        return self._record(self.client.send_file(self.key, path, **kwargs))
+        result = self._record(self.client.send_file(self.key, path, **kwargs))
+        self._activity()
+        return result
 
     def send_voice(self, chat, path, **kwargs):
         del chat
-        return self._record(self.client.send_voice(self.key, path, **kwargs))
+        result = self._record(self.client.send_voice(self.key, path, **kwargs))
+        self._activity()
+        return result
 
     def get_file_path(self, file_id):
         return self.client.get_file_path(file_id)
@@ -276,6 +292,7 @@ class LaneBridge:
                  codex_sessions_root: Path = Path("~/.codex/sessions").expanduser()):
         self.key = key
         self.tg = LaneTelegram(tg, key, lane_store)
+        self.tg.on_send = self._note_activity
         self._on_close = on_close
         self._on_parked = on_parked
         self._session = session
@@ -339,6 +356,8 @@ class LaneBridge:
         self._claude_hook_ready = self.agent != "claude-code"
         self._turn_started_wall = time.time()
         self._last_activity = time.monotonic()
+        self._last_activity_wall = time.time()
+        self._silence_notice_sent = False
         self._turn_started = self._last_activity
         self._turn_begun_at = self._last_activity
         self._last_typing = self._last_activity
@@ -1091,6 +1110,7 @@ class LaneBridge:
         # Delta (a): Claude pin-probe arming/clearing is omitted because lane identity is assigned.
         self._turn_active.set()
         self._last_activity = time.monotonic()
+        self._last_activity_wall = time.time()
         last_error: Exception | None = None
         for attempt in range(1, INJECT_ATTEMPTS + 1):
             try:
@@ -1243,6 +1263,31 @@ class LaneBridge:
                 elif now - seen[1] >= 10.0:
                     self._show_dialog_with_kind(pane, proactive=True)
 
+    def _note_activity(self) -> None:
+        if getattr(self, "_sending_silence_notice", False):
+            return
+        self._sent_activity = time.monotonic()
+        self._last_activity_wall = time.time()
+        if getattr(self, "_turn_from_tg", False):
+            self._silence_notice_sent = False
+
+    def _silence_notice_tick(self) -> None:
+        if (not self._turn_active.is_set() or not self._turn_from_tg
+                or self._dialog is not None or self._silence_notice_sent
+                or time.monotonic() - max(self._last_activity, getattr(self, "_sent_activity", 0.0))
+                < SILENCE_NOTICE_S):
+            return
+        old_wall = self._last_activity_wall
+        clock = datetime.fromtimestamp(old_wall).strftime("%H:%M")
+        self._silence_notice_sent = True
+        self._sending_silence_notice = True
+        try:
+            self.tg.send_message(self.key.chat_id,
+                f"⏳ Agent je od {clock} bez aktivity a tah pořád běží. Nejspíš na něčem visí.")
+        finally:
+            self._sending_silence_notice = False
+            self._last_activity_wall = old_wall
+
     def _refresh_after_key(self) -> None:
         """After a click: deliver the parked messages, or show whatever dialog came next."""
         self._stop.wait(0.5)
@@ -1376,6 +1421,8 @@ class LaneBridge:
         self._turn_active.set()
         self._turn_from_tg = True
         self._last_activity = now
+        self._last_activity_wall = time.time()
+        self._silence_notice_sent = False
         if self._lane_store is not None:
             self._lane_store.set_busy(self.key, True)
             self._lane_store.touch(self.key, time.time())
@@ -1536,6 +1583,7 @@ class LaneBridge:
             self._finish_turn()
         if self._turn_from_tg:
             self._last_activity = time.monotonic()
+            self._last_activity_wall = time.time()
 
     # Ported from agent2telegram/attach.py::_handle_event (MIT). Deltas: per-lane Telegram delivery
     # and step-6 transcript identity.
@@ -2251,6 +2299,7 @@ class LaneBridge:
             # An outbound-only startup recovery can run before a parked lane gets a
             # tmux session. Keep inbox replay dormant until the lane is activated.
             self._dialog_tick()
+            self._silence_notice_tick()
             if (not getattr(self, "_defer_inbound_replay", False)
                     and time.monotonic() - getattr(self, "_last_inbound_retry", 0.0) > INBOUND_RETRY_INTERVAL):
                 self._last_inbound_retry = time.monotonic()

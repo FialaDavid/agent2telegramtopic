@@ -96,7 +96,16 @@ def _unnumbered(lines: list[str]) -> tuple[list[int], list[Option], int | None] 
 
 def parse(pane: str) -> Dialog:
     lines = block_of(pane)
+    lines = [ln for ln in lines if not _RULE_RE.match(ln)]
     found = _numbered(lines) or _unnumbered(lines)
+    if not found:
+        rules = [i for i, ln in enumerate((pane or "").rstrip().splitlines()) if _RULE_RE.match(ln)]
+        if len(rules) >= 2:
+            source = (pane or "").rstrip().splitlines()
+            start = rules[-3] if len(rules) >= 3 else rules[-2]
+            lines = source[start + 1:]
+            lines = [ln for ln in lines if not _RULE_RE.match(ln)]
+            found = _numbered(lines) or _unnumbered(lines)
     rows, options, highlighted = found if found else ([], [], None)
     skip = set(rows)
     if found:
