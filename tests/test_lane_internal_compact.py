@@ -459,7 +459,7 @@ def test_codex_compact_waits_for_matching_turn_id(tmp_path):
 
 
 @pytest.mark.parametrize("agent", ["claude-code", "codex"])
-def test_declined_compaction_finishes_from_transcript_without_recording_compaction(tmp_path, agent):
+def test_declined_compaction_finishes_from_transcript_and_records_it_as_done(tmp_path, agent):
     tg, session = Telegram(), Session()
     state = lane_state_dir("declined", 1, 12, tmp_path)
     state.mkdir(parents=True)
@@ -483,7 +483,10 @@ def test_declined_compaction_finishes_from_transcript_without_recording_compacti
         stream.write(json.dumps(decline) + "\n")
     bridge.outbound_tick()
     assert done.is_set()
-    assert store.get(key).last_compact is None
+    # A declined (no-op) compaction counts as done, so idle compaction is not retried
+    # until there is new activity; the context count is left as it was.
+    assert store.get(key).last_compact is not None
+    assert store.get(key).ctx_tokens == 40000
     assert tg.messages == []
 
 
