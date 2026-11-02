@@ -23,6 +23,23 @@ from . import redaction
 from .routing import LaneKey, reply_params
 
 
+def _hard_line_breaks(text: str) -> str:
+    lines = text.split("\n")
+    in_fence = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line.strip() or index + 1 >= len(lines):
+            continue
+        next_line = lines[index + 1]
+        if (not next_line.strip() or next_line.lstrip().startswith(("```", "~~~"))
+                or line.endswith("  ") or line.endswith("\\")):
+            continue
+        lines[index] += "  "
+    return "\n".join(lines)
+
+
 def _is_word_char(ch: str) -> bool:
     return bool(ch) and (ch.isalnum() or ch == "_")
 
@@ -391,7 +408,7 @@ class TelegramClient:
                     ids += self._send_legacy(key, chunk)
                     continue
                 params = {**reply_params(key),
-                          "rich_message": json.dumps({"markdown": chunk}),
+                          "rich_message": json.dumps({"markdown": _hard_line_breaks(chunk)}),
                           "link_preview_options": json.dumps({"is_disabled": True})}
                 try:
                     ids.append(self._message_id(self._call("sendRichMessage", params, timeout=SEND_TIMEOUT)))

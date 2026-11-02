@@ -29,6 +29,20 @@ class FakeTransport:
         return self.response
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("a\nb", "a  \nb"),
+    ("a\n\nb", "a\n\nb"),
+    ("lead\nbefore\n```\na\nb\n```\nafter\nlast", "lead  \nbefore\n```\na\nb\n```\nafter  \nlast"),
+    ("a  \nb", "a  \nb"),
+])
+def test_rich_send_hardens_soft_line_breaks_in_markdown_payload(text, expected):
+    transport = FakeTransport()
+    TelegramClient("secret", opener=TransportOpener(transport)).send_message(LaneKey(12, GENERAL_THREAD_ID), text)
+    method, params = transport.calls[0]
+    assert method == "sendRichMessage"
+    assert json.loads(params["rich_message"]) == {"markdown": expected}
+
+
 def test_send_message_and_chat_action_route_general_and_topic():
     transport = FakeTransport()
     client = TelegramClient("secret", opener=TransportOpener(transport))
