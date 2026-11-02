@@ -153,7 +153,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 expected_agent_commands=_expected_agent_commands(config))
         bridge._session_alive = session_alive
         bridge._activate_session = activate_session
-        def close_lane(close_key):
+        def close_lane(close_key, fresh=False):
             if close_key != key:
                 return
             def park_after_command():
@@ -202,7 +202,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     notify("⚠️ Couldn't close this topic's session. Try again.")
                     return
                 if session_obj is not None:
-                    if not session_alive() or lane_store.get(key).ctx_tokens < config.compact_min_tokens:
+                    if fresh or not session_alive() or lane_store.get(key).ctx_tokens < config.compact_min_tokens:
                         log.info("close %s compaction: skipped", key)
                     else:
                         event = bridge.compact_internal()
@@ -214,19 +214,20 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                             log.info("close %s compaction: failed-continuing", key)
                         else:
                             log.info("close %s compaction: done", key)
-                    try:
-                        session_obj.close()
-                        log.info("close %s session close result: ok", key)
-                    except Exception:
-                        log.exception("could not close lane %s", key)
-                        log.info("close %s session close result: error", key)
-                    if session_alive():
-                        bridge._closing = False
-                        lane_store.set_status(key, "live")
-                        lane_store.set_busy(key, False)
-                        log.info("close %s final status: live", key)
-                        notify("⚠️ Couldn't close this topic's session. Try again.")
-                        return
+                    if not fresh:
+                        try:
+                            session_obj.close()
+                            log.info("close %s session close result: ok", key)
+                        except Exception:
+                            log.exception("could not close lane %s", key)
+                            log.info("close %s session close result: error", key)
+                        if session_alive():
+                            bridge._closing = False
+                            lane_store.set_status(key, "live")
+                            lane_store.set_busy(key, False)
+                            log.info("close %s final status: live", key)
+                            notify("⚠️ Couldn't close this topic's session. Try again.")
+                            return
                 else:
                     log.info("close %s compaction: skipped", key)
                     log.info("close %s session close result: skipped", key)
@@ -246,6 +247,13 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 except Exception:
                     log.exception("could not write the archive record for %s", key)
                     log.info("close %s archive exception", key)
+                    if fresh:
+                        bridge._closing = False
+                        lane_store.set_status(key, "live")
+                        lane_store.set_busy(key, False)
+                        log.info("close %s final status: live", key)
+                        notify("⚠️ Couldn't close this topic's session. Try again.")
+                        return
                     lane_store.set_status(key, "parked")
                     lane_store.set_busy(key, False)
                     mux._retire_parked_lane(key, bridge)
@@ -254,6 +262,13 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     log.info("close %s final status: parked", key)
                     return
                 log.info("close %s archive written: %s", key, archive_path)
+                if fresh:
+                    bridge._closing = False
+                    lane_store.set_status(key, "live")
+                    lane_store.set_busy(key, False)
+                    log.info("close %s final status: live (renewed)", key)
+                    bridge._cmd_new(key.chat_id, archive_prefix="🗄️ Previous conversation archived (summary saved).")
+                    return
                 with mux._lane_lock:
                     try:
                         inbox = bridge._ensure_inbox()
@@ -271,6 +286,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 log.info("close %s final status: %s", key, "waiting" if pending else "archived")
             threading.Thread(target=park_after_command, daemon=True).start()
         bridge._on_close = close_lane
+        bridge._on_renew = lambda renew_key: close_lane(renew_key, fresh=True)
         bridge_ref["bridge"] = bridge
         return bridge
 

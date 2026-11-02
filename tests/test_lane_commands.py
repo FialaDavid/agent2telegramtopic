@@ -89,7 +89,7 @@ def test_startup_registers_all_supported_topic_commands(monkeypatch, tmp_path):
 
     assert app_module.main([]) == 0
     assert [item["command"] for item in registered] == [
-        "start", "help", "status", "usage", "new", "rename", "setkey", "voice", "id", "close"]
+        "start", "help", "status", "usage", "new", "renew", "rename", "setkey", "voice", "id", "close"]
     assert all(item.get("description") for item in registered)
 
 
@@ -264,7 +264,7 @@ def test_new_uses_agent_command_and_is_consumed(tmp_path, agent, command, text):
     assert lane._session.injected == []
     assert lane._turn_from_tg is False
     assert len(tg.messages) == 1
-    assert tg.messages[0][1] == f"🧹 Started a fresh conversation — sent {command} to the session."
+    assert tg.messages[0][1].startswith("🧹 New conversation")
     assert inbox.pending() == []
     lane._stop.set()
 
@@ -284,6 +284,60 @@ def test_new_failure_is_reported_once_consumed_and_record_completed(tmp_path, er
     assert expected in tg.messages[0][1]
     assert inbox.pending() == []
     lane._stop.set()
+
+
+def test_new_message_includes_title_model_effort_and_usage(monkeypatch, tmp_path):
+    lane, tg = make_lane(tmp_path)
+    lane._lane_store = SimpleNamespace(topic_titles=lambda: {lane.key: 'Boiler *urgent*'})
+    lane.cfg.claude_cmd = ("claude", "--model", "claude-opus-5-5", "--effort", "medium")
+    lane._transcript = tmp_path / "transcript.jsonl"
+    monkeypatch.setattr(lane_module.transcript, "claude_model", lambda _path: "claude-opus-5-5")
+    now = 1800000000.0
+    monkeypatch.setattr(lane_module.time, "time", lambda: now)
+    monkeypatch.setattr(lane_module.usage, "read_claude_limits", lambda _path:
+                        (now, [("5-hour", 84, now + 2 * 3600 + 35 * 60),
+                               ("7-day", 63, now + 2 * 86400 + 21 * 3600)]))
+    text = lane._new_conversation_message()
+    assert text.startswith("🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · effort medium\n")
+    expected_session_time = datetime.fromtimestamp(now + 2 * 3600 + 35 * 60)
+    expected_weekly_time = datetime.fromtimestamp(now + 2 * 86400 + 21 * 3600)
+    session_stamp = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[expected_session_time.weekday()] + expected_session_time.strftime(" %H:%M")
+    weekly_stamp = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[expected_weekly_time.weekday()] + expected_weekly_time.strftime(" %H:%M")
+    assert text == (f"🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · effort medium\n"
+                    f"_Session 84% · resets in 2h 35m · {session_stamp}_\n"
+                    f"_Weekly 63% · resets in 2d 21h · {weekly_stamp}_")
+
+
+@pytest.mark.parametrize("model,expected", [("claude-sonnet-4-5-extra", "Sonnet 4.5"),
+                                               ("claude-fable-2", "Fable 2")])
+def test_claude_model_name_mapping(monkeypatch, tmp_path, model, expected):
+    lane, _ = make_lane(tmp_path)
+    lane.cfg.claude_cmd = ()
+    lane._transcript = tmp_path / "transcript.jsonl"
+    monkeypatch.setattr(lane_module.transcript, "claude_model", lambda _path: model)
+    monkeypatch.setattr(lane_module.usage, "read_claude_limits", lambda _path: None)
+    assert f"— {expected}" in lane._new_conversation_message()
+
+
+def test_codex_new_message_reads_effort_from_rollout_turn_context(monkeypatch, tmp_path):
+    lane, _ = make_lane(tmp_path)
+    lane.cfg.agent = "codex"
+    lane._lane_store = SimpleNamespace(topic_titles=lambda: {})
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text('{"type":"turn_context","payload":{"model":"gpt-6-luna","effort":"medium"}}\n', "utf-8")
+    lane._transcript = rollout
+    monkeypatch.setattr(lane_module.usage, "read_codex_limits", lambda *_args: None)
+    assert lane._new_conversation_message() == "🧹 New conversation — gpt\\-6\\-luna · effort medium"
+
+
+def test_new_message_omits_unknown_title_model_effort_and_usage(monkeypatch, tmp_path):
+    lane, _ = make_lane(tmp_path)
+    lane._lane_store = SimpleNamespace(topic_titles=lambda: {})
+    lane.cfg.claude_cmd = ("claude",)
+    lane._transcript = tmp_path / "transcript.jsonl"
+    monkeypatch.setattr(lane_module.transcript, "claude_model", lambda _path: None)
+    monkeypatch.setattr(lane_module.usage, "read_claude_limits", lambda _path: None)
+    assert lane._new_conversation_message() == "🧹 New conversation"
 
 
 def test_close_calls_lane_callback_once(tmp_path):
@@ -369,7 +423,7 @@ def test_new_in_one_lane_only_sends_and_notifies_in_that_lane(tmp_path):
     assert lane_b._session.injected == []
     assert len(tg.messages) == 1
     assert tg.messages[0][0] == key_a
-    assert tg.messages[0][1] == "🧹 Started a fresh conversation — sent /clear to the session."
+    assert tg.messages[0][1].startswith("🧹 New conversation")
     assert tg.messages[0][2] == {"chat_id": 44, "message_thread_id": 41}
     lane_a._stop.set()
     lane_b._stop.set()

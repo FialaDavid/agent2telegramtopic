@@ -166,6 +166,22 @@ def test_close_compaction_timeout_still_archives(world, tmp_path, monkeypatch):
     assert records(tmp_path)[0]["summary"] == SUMMARY
 
 
+def test_renew_archives_summary_resets_session_and_keeps_lane_live(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    bridge._handle_command("/renew", KEY.chat_id)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not client.sent:
+        time.sleep(0.02)
+    assert len(client.sent) == 1
+    assert client.sent[0][1].startswith("🗄️ Previous conversation archived (summary saved).\n🧹 New conversation in topic “Boiler”")
+    (record,) = records(tmp_path)
+    assert record["summary"] == SUMMARY and record["summary_error"] is None
+    assert "/clear" in bridge._session.commands
+    assert bridge._session.alive
+    assert mux.lane_store.get(KEY).status == "live"
+    assert not bridge._stop.is_set()
+
+
 def test_summary_that_never_arrives_still_archives_with_null_summary(world, tmp_path, monkeypatch):
     monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.3)
     mux, bridge, client = world("claude-code", answer=None)

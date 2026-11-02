@@ -45,6 +45,7 @@ BOT_COMMANDS = [
     {"command": "status", "description": "Bridge health and queue status"},
     {"command": "usage", "description": "Model usage limits"},
     {"command": "new", "description": "Start a fresh conversation"},
+    {"command": "renew", "description": "Archive this conversation and start a fresh one"},
     {"command": "rename", "description": "Rename this topic"},
     {"command": "setkey", "description": "Enable voice (your ElevenLabs API key)"},
     {"command": "voice", "description": "Toggle spoken (voice-note) replies"},
@@ -294,6 +295,7 @@ class LaneBridge:
         self.tg = LaneTelegram(tg, key, lane_store)
         self.tg.on_send = self._note_activity
         self._on_close = on_close
+        self._on_renew = None
         self._on_parked = on_parked
         self._session = session
         self._lane_store = lane_store
@@ -336,7 +338,8 @@ class LaneBridge:
         if config is not None:
             for name in ("bot_name", "elevenlabs_api_key", "elevenlabs_language",
                          "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
-                         "tts_timeout", "file_marker", "outbox_dirs", "background_progress", "inbound_sender_label"):
+                         "tts_timeout", "file_marker", "outbox_dirs", "background_progress", "inbound_sender_label",
+                         "claude_cmd"):
                 setattr(self, name, getattr(config, name))
         if getattr(self, "bot_name", None):
             _BOT_ELEVENLABS_KEYS.setdefault(self.bot_name, getattr(self, "elevenlabs_api_key", ""))
@@ -741,7 +744,7 @@ class LaneBridge:
                 f"👋 You're connected to a live *{agent}* session via Agent2TelegramTopic.\n\n"
                 "Just send a message — it goes straight to the agent. You can also send photos and files.\n\n"
                 f"🎤 Voice transcription: {voice}.\n\n"
-                "Commands: /help · /status · /usage · /new · /id · /setkey · /voice · /close")
+                "Commands: /help · /status · /usage · /new · /renew · /id · /setkey · /voice · /close")
             return True
         if cmd == "id":
             self.tg.send_message(chat_id, f"Your Telegram id: `{chat_id}`")
@@ -754,6 +757,18 @@ class LaneBridge:
             return True
         if cmd == "new":
             return self._cmd_new(chat_id)
+        if cmd == "renew":
+            try:
+                if self._on_renew is None:
+                    raise RuntimeError("lane renew callback is not configured")
+                with self._internal_lock:
+                    self._closing = True
+                self._on_renew(self.key)
+            except Exception as exc:
+                self._closing = False
+                log.error("/renew failed: error=%s", type(exc).__name__)
+                self.tg.send_message(chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+            return True
         if cmd == "rename":
             if not arg:
                 self.tg.send_message(chat_id, "Usage: `/rename <name>`")
@@ -862,8 +877,9 @@ class LaneBridge:
     # Delta: omit _claude_pinned and _clear_claude_pin_probe because lane identity is assigned and
     # has no pin probe. Retain _transcript: clearing it would make _maybe_reresolve re-adopt and
     # _seek_to_turn the old transcript before the Stop-hook marker moves.
-    def _cmd_new(self, chat_id: int) -> bool:
+    def _cmd_new(self, chat_id: int, archive_prefix: str | None = None) -> bool:
         reset = '/clear' if self.cfg.agent == 'claude-code' else '/new'
+        message = self._new_conversation_message()
         try:
             self._session.send_command(reset)
         except Exception as exc:
@@ -877,8 +893,66 @@ class LaneBridge:
             else:
                 self.tg.send_message(chat_id, "⚠️ Couldn't start a fresh conversation (the session may be busy or gone). Try again.")
             return True
-        self.tg.send_message(chat_id, f"🧹 Started a fresh conversation — sent {reset} to the session.")
+        self.tg.send_message(chat_id, f"{archive_prefix}\n{message}" if archive_prefix else message)
         return True
+
+    def _new_conversation_message(self):
+        parts = ["🧹 New conversation"]
+        title = self._lane_store.topic_titles().get(self.key) if self._lane_store else None
+        if title:
+            parts[0] += f' in topic “{self._escape_markdown(title)}”'
+        model = effort = None
+        try:
+            if self.cfg.agent == "claude-code":
+                raw_model = transcript.claude_model(self._transcript) if self._transcript else None
+                match = re.match(r"claude-(opus|sonnet|haiku|fable)-(\d+(?:[-.]\d+)?)(?:[-:].*)?$", raw_model or "", re.I)
+                model = f"{match.group(1).capitalize()} {match.group(2).replace('-', '.')}" if match else None
+                command = getattr(self.cfg, "claude_cmd", ())
+                effort = command[command.index("--effort") + 1] if "--effort" in command else None
+            else:
+                model = transcript.codex_model(self._transcript) if self._transcript else None
+                effort = self._codex_effort()
+        except (AttributeError, OSError, ValueError, IndexError):
+            pass
+        if model:
+            parts[0] += f" — {self._escape_markdown(model)}"
+        if effort:
+            parts[0] += f" · effort {self._escape_markdown(effort)}"
+        found = (usage.read_codex_limits(self._transcript, self.codex_sessions_root)
+                 if self.cfg.agent == "codex" else
+                 usage.read_claude_limits(claude_rate_limits_file(getattr(self, "bot_name", ""))))
+        now = time.time()
+        lines = [parts[0]]
+        if found:
+            captured, windows = found
+            for label, used, resets_at in windows:
+                name = {"5-hour": "Session", "7-day": "Weekly"}.get(label, label)
+                line = f"{name} {used:.0f}%"
+                if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
+                    reset = usage._duration(max(0, resets_at - now))
+                    reset_time = datetime.fromtimestamp(resets_at)
+                    local = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[reset_time.weekday()] + reset_time.strftime(" %H:%M")
+                    line += f" · resets in {reset} · {local}"
+                if isinstance(captured, (int, float)) and now - captured > usage.STALE_LIMIT:
+                    line += " (stale)"
+                lines.append(f"_{line}_")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _escape_markdown(value):
+        return re.sub(r"([\\_*\[\]()~`>#+=|{}!-])", r"\\\1", str(value))
+
+    def _codex_effort(self):
+        try:
+            with open(self._transcript, encoding="utf-8") as stream:
+                for line in reversed(stream.readlines()):
+                    row = json.loads(line)
+                    payload = row.get("payload", {})
+                    if row.get("type") == "turn_context" and payload.get("effort"):
+                        return str(payload["effort"])
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
 
     def _prepend_reply_context(self, msg: dict, text: str) -> str:
         replied_to = msg.get("reply_to_message") or {}
