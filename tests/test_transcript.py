@@ -2,8 +2,10 @@ import json
 
 from agent2telegramtopic.transcript import (
     claude_ctx_tokens,
+    claude_model,
     claude_transcript_path,
     codex_ctx_tokens,
+    codex_model,
     codex_rollout_id,
     codex_rollout_path,
     find_codex_rollout,
@@ -32,6 +34,17 @@ def test_claude_ctx_uses_last_assistant_usage_and_cache_fields(tmp_path):
         }}},
     ])
     assert claude_ctx_tokens(path) == 60
+
+
+def test_claude_model_tracks_latest_real_assistant_model(tmp_path):
+    path = write_jsonl(tmp_path / "claude-model.jsonl", [
+        {"type": "assistant", "message": {"model": "claude-opus-5-5"}},
+        {"type": "assistant", "message": {"model": "claude-opus-4-8"}},
+        {"type": "assistant", "message": {"model": "<synthetic>"}},
+        {"type": "assistant", "message": {}},
+    ])
+    assert claude_model(path) == "claude-opus-4-8"
+    assert claude_model(tmp_path / "missing.jsonl") is None
 
 
 def test_context_readers_return_none_for_missing_files_or_no_usage(tmp_path):
@@ -70,6 +83,14 @@ def test_codex_ctx_uses_last_token_count_and_total_usage_fallback(tmp_path):
         }}},
     ])
     assert codex_ctx_tokens(present_but_empty) == 55
+
+
+def test_codex_model_reads_turn_context_model(tmp_path):
+    path = write_jsonl(tmp_path / "rollout-model.jsonl", [
+        {"type": "event_msg", "payload": {"type": "turn_context", "model": "gpt-6-sol"}},
+        {"type": "event_msg", "payload": {"type": "turn_context", "model": "gpt-6-luna"}},
+    ])
+    assert codex_model(path) == "gpt-6-luna"
 
 
 def test_find_codex_rollout_selects_newest_recent_matching_cwd(tmp_path):

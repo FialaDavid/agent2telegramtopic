@@ -13,7 +13,7 @@ from agent2telegramtopic.status import StatusWriter
 
 TOKEN = "7654321:status-test-token-must-never-leak"
 LANE_KEYS = {"chat", "thread", "title", "agent", "cwd", "tmux_session", "alive", "status", "busy",
-             "last_activity", "last_compact", "ctx_tokens", "ctx_window"}
+             "last_activity", "last_compact", "ctx_tokens", "ctx_window", "model"}
 TOP_KEYS = {"schema", "bot", "version", "pid", "config", "tmux_tmpdir", "started_at", "updated_at",
             "heartbeat_seconds", "lanes"}
 
@@ -63,7 +63,21 @@ def test_writes_valid_schema_1_file_with_every_key(instance, tmp_path):
     assert entry["tmux_session"] == name and entry["alive"] is True
     assert entry["status"] == "live" and entry["busy"] is True
     assert entry["last_activity"] == 1000 and entry["ctx_tokens"] == 84213
+    assert entry["model"] is None
     assert stat.S_IMODE(writer.path.stat().st_mode) == 0o600
+
+
+def test_snapshot_includes_model_from_lane_transcript(instance, tmp_path):
+    store = LaneStore(":memory:")
+    store.upsert(lane())
+    cwd = tmp_path / "lanes" / "123" / "7"
+    transcript_path = status_module.transcript.claude_transcript_path("s", cwd)
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text(json.dumps({"type": "assistant", "message": {
+        "model": "claude-opus-4-8"}}) + "\n")
+    writer = make_writer(instance, tmp_path, store)
+    writer.write()
+    assert read(writer)["lanes"][0]["model"] == "claude-opus-4-8"
 
 
 def test_unknown_values_are_null_not_missing(instance, tmp_path):

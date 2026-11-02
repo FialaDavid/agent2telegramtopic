@@ -48,6 +48,19 @@ def claude_ctx_tokens(path: str | Path) -> int | None:
     return result
 
 
+def claude_model(path: str | Path) -> str | None:
+    """Return the latest real model id on a Claude assistant entry."""
+    result = None
+    for entry in _json_lines(path):
+        if not isinstance(entry, dict) or entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if isinstance(model, str) and model and model != "<synthetic>":
+            result = model
+    return result
+
+
 def codex_ctx_tokens(path: str | Path) -> int | None:
     """Return input token usage from the latest Codex token_count event."""
     result = None
@@ -67,6 +80,19 @@ def codex_ctx_tokens(path: str | Path) -> int | None:
             input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
         if isinstance(input_tokens, int):
             result = input_tokens
+    return result
+
+
+def codex_model(path: str | Path) -> str | None:
+    """Return the latest model id in a Codex rollout turn_context entry."""
+    result = None
+    for entry in _json_lines(path):
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        model = payload.get("model") if isinstance(payload, dict) else None
+        if isinstance(model, str) and model:
+            result = model
     return result
 
 

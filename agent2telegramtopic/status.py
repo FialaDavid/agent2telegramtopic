@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, transcript
 from .config import lane_path, lane_state_file
 from .routing import LaneKey
 from .tmux import session_name
@@ -90,6 +90,27 @@ class StatusWriter:
         lanes = []
         for lane in self.lane_store.list_all():
             key = LaneKey(lane.chat_id, lane.thread_id)
+            transcript_path = None
+            if lane.agent == "claude-code":
+                try:
+                    marker = json.loads(lane_state_file(
+                        self.config.bot_name, lane.chat_id, lane.thread_id, "session"
+                    ).read_text("utf-8"))
+                    candidate = Path(marker["transcript_path"]).expanduser()
+                    transcript_path = candidate if candidate.is_file() else None
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+                if transcript_path is None and lane.session_id:
+                    candidate = transcript.claude_transcript_path(
+                        lane.session_id, lane_path(self.root, lane.chat_id, lane.thread_id))
+                    transcript_path = candidate if candidate.is_file() else None
+            elif lane.agent == "codex" and lane.session_id:
+                transcript_path = transcript.codex_rollout_path(
+                    Path("~/.codex/sessions").expanduser(), lane.session_id)
+            model = None
+            if transcript_path is not None:
+                model = (transcript.codex_model(transcript_path) if lane.agent == "codex"
+                         else transcript.claude_model(transcript_path))
             tmux_session = session_name(self.config.agent_kind, f"topic {lane.thread_id}",
                                         lane.thread_id, lane.chat_id)
             lanes.append({
@@ -105,6 +126,7 @@ class StatusWriter:
                 "last_activity": _seconds(lane.last_activity),
                 "last_compact": self._last_compact(lane),
                 "ctx_tokens": lane.ctx_tokens,
+                "model": model,
                 "ctx_window": ctx_windows.get(str(lane_path(
                     self.root, lane.chat_id, lane.thread_id).resolve())),
             })

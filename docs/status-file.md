@@ -33,7 +33,8 @@ compaction, title change).
       "last_activity": 1793443000,
       "last_compact": 1793400000,
       "ctx_tokens": 84213,
-      "ctx_window": null
+      "ctx_window": null,
+      "model": "claude-opus-4-8"
     }
   ]
 }
@@ -59,6 +60,7 @@ Rules:
   `null` if never.
 - `ctx_window`: Claude lanes use the latest `context_window.context_window_size` from statusLine,
   matched by resolved cwd; Codex lanes and unmatched or unavailable values are `null`.
+- `model`: the latest real assistant model from the lane's transcript; `null` when unavailable.
   Compute a percentage only when both `ctx_tokens` and `ctx_window` are non-null.
 - Staleness: treat the bridge as hung or stopped when
   `now - updated_at > 3 * heartbeat_seconds + 30`.
