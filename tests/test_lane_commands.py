@@ -298,14 +298,14 @@ def test_new_message_includes_title_model_effort_and_usage(monkeypatch, tmp_path
                         (now, [("5-hour", 84, now + 2 * 3600 + 35 * 60),
                                ("7-day", 63, now + 2 * 86400 + 21 * 3600)]))
     text = lane._new_conversation_message()
-    assert text.startswith("🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · effort medium\n")
+    assert text.startswith("🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · medium\n")
     expected_session_time = datetime.fromtimestamp(now + 2 * 3600 + 35 * 60)
     expected_weekly_time = datetime.fromtimestamp(now + 2 * 86400 + 21 * 3600)
     session_stamp = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[expected_session_time.weekday()] + expected_session_time.strftime(" %H:%M")
     weekly_stamp = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[expected_weekly_time.weekday()] + expected_weekly_time.strftime(" %H:%M")
-    assert text == (f"🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · effort medium\n"
-                    f"_Session 84% · resets in 2h 35m · {session_stamp}_\n"
-                    f"_Weekly 63% · resets in 2d 21h · {weekly_stamp}_")
+    assert text == (f"🧹 New conversation in topic “Boiler \\*urgent\\*” — Opus 5.5 · medium\n"
+                    f"🔴 Session 84% · resets in 2h 35m · {session_stamp}\n"
+                    f"🟠 Weekly 63% · resets in 2d 21h · {weekly_stamp}")
 
 
 @pytest.mark.parametrize("model,expected", [("claude-sonnet-4-5-extra", "Sonnet 4.5"),
@@ -327,7 +327,17 @@ def test_codex_new_message_reads_effort_from_rollout_turn_context(monkeypatch, t
     rollout.write_text('{"type":"turn_context","payload":{"model":"gpt-6-luna","effort":"medium"}}\n', "utf-8")
     lane._transcript = rollout
     monkeypatch.setattr(lane_module.usage, "read_codex_limits", lambda *_args: None)
-    assert lane._new_conversation_message() == "🧹 New conversation — gpt\\-6\\-luna · effort medium"
+    assert lane._new_conversation_message() == "🧹 New conversation — gpt\\-6\\-luna · medium"
+
+
+@pytest.mark.parametrize("used,dot", [(49, "🟢"), (50, "🟠"), (80, "🔴")])
+def test_new_message_usage_status_dot_thresholds(monkeypatch, tmp_path, used, dot):
+    lane, _ = make_lane(tmp_path)
+    now = 1800000000.0
+    monkeypatch.setattr(lane_module.time, "time", lambda: now)
+    monkeypatch.setattr(lane_module.usage, "read_claude_limits", lambda _path: (now, [("5-hour", used, None)]))
+    text = lane._new_conversation_message()
+    assert text.splitlines()[1] == f"{dot} Session {used}%"
 
 
 def test_new_message_omits_unknown_title_model_effort_and_usage(monkeypatch, tmp_path):

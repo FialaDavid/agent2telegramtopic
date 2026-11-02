@@ -917,7 +917,7 @@ class LaneBridge:
         if model:
             parts[0] += f" — {self._escape_markdown(model)}"
         if effort:
-            parts[0] += f" · effort {self._escape_markdown(effort)}"
+            parts[0] += f" · {self._escape_markdown(effort)}"
         found = (usage.read_codex_limits(self._transcript, self.codex_sessions_root)
                  if self.cfg.agent == "codex" else
                  usage.read_claude_limits(claude_rate_limits_file(getattr(self, "bot_name", ""))))
@@ -935,7 +935,8 @@ class LaneBridge:
                     line += f" · resets in {reset} · {local}"
                 if isinstance(captured, (int, float)) and now - captured > usage.STALE_LIMIT:
                     line += " (stale)"
-                lines.append(f"_{line}_")
+                dot = "🟢" if used < 50 else "🟠" if used < 80 else "🔴"
+                lines.append(f"{dot} {line}")
         return "\n".join(lines)
 
     @staticmethod
