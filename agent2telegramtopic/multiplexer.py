@@ -72,6 +72,33 @@ class Multiplexer:
         reader = getattr(bridge, "_internal_context_tokens", None)
         return reader() if callable(reader) else None
 
+    def _control_loop(self):
+        from .control import control_dir
+        # The bot name is encoded in the configured lane state root: .../state/<bot>/lanes.
+        root = self.lane_states_root.parent / "control"
+        while not self._stop.wait(1):
+            for path in sorted(root.glob("*.json")) if root.exists() else ():
+                try:
+                    request = json.loads(path.read_text("utf-8"))
+                except Exception as exc:
+                    self.log.warning("ignoring malformed control request %s: %s", path.name, exc)
+                    path.unlink(missing_ok=True)
+                    continue
+                path.unlink(missing_ok=True)
+                try:
+                    if request.get("action") != "close" or type(request.get("chat")) is not int or type(request.get("thread")) is not int:
+                        raise ValueError("invalid close request")
+                    key = routing.LaneKey(request["chat"], request["thread"])
+                    row = self.lane_store.get(key)
+                    if row is None or row.status == "archived":
+                        continue
+                    lane = self._lane(key)
+                    callback = getattr(lane, "_on_close", None)
+                    if callable(callback):
+                        callback(key)
+                except Exception:
+                    self.log.exception("could not process control request %s", path.name)
+
     def _idle_watcher_loop(self):
         from .watcher import IdleWatcher
 
@@ -801,6 +828,8 @@ class Multiplexer:
     def run_forever(self, poll_timeout=None):
         if poll_timeout is not None:
             self.poll_timeout = poll_timeout
+        if self.lane_store is not None:
+            threading.Thread(target=self._control_loop, daemon=True).start()
         if self.lane_store is not None and self._watcher_thread is None:
             self._watcher_thread = threading.Thread(target=self._idle_watcher_loop, daemon=True)
             self._watcher_thread.start()

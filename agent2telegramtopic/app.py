@@ -157,6 +157,12 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
             if close_key != key:
                 return
             def park_after_command():
+                def notify(text):
+                    # The topic may already be deleted in Telegram; closing must not depend on it.
+                    try:
+                        bridge.tg.send_message(key.chat_id, text)
+                    except Exception:
+                        log.warning("could not send close notice for %s", key, exc_info=True)
                 bridge._closing = True
                 log.info("close %s started", key)
                 # The /close command itself is still owned by the inbound worker.
@@ -193,7 +199,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     lane_store.set_status(key, "live")
                     lane_store.set_busy(key, False)
                     log.info("close %s final status: live", key)
-                    bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                    notify("⚠️ Couldn't close this topic's session. Try again.")
                     return
                 if session_obj is not None:
                     if not session_alive() or lane_store.get(key).ctx_tokens < config.compact_min_tokens:
@@ -219,7 +225,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                         lane_store.set_status(key, "live")
                         lane_store.set_busy(key, False)
                         log.info("close %s final status: live", key)
-                        bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                        notify("⚠️ Couldn't close this topic's session. Try again.")
                         return
                 else:
                     log.info("close %s compaction: skipped", key)
@@ -244,7 +250,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     lane_store.set_busy(key, False)
                     mux._retire_parked_lane(key, bridge)
                     bridge.stop()
-                    bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                    notify("⚠️ Couldn't close this topic's session. Try again.")
                     log.info("close %s final status: parked", key)
                     return
                 log.info("close %s archive written: %s", key, archive_path)
@@ -261,8 +267,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     mux._retire_parked_lane(key, bridge)
                     bridge.stop()
                 mux._slot_wakeup.set()
-                bridge.tg.send_message(
-                    key.chat_id, "🗄️ Archived. You can delete this topic; writing here again resumes the session.")
+                notify("🗄️ Archived. You can delete this topic; writing here again resumes the session.")
                 log.info("close %s final status: %s", key, "waiting" if pending else "archived")
             threading.Thread(target=park_after_command, daemon=True).start()
         bridge._on_close = close_lane

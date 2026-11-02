@@ -13,6 +13,7 @@ commands:
   run         run the bridge in the foreground (what the background service does)
   uninstall   stop the service and remove config, state and the installed launcher
   topic-edit  "<name>" "<emoji>": rename the current topic and set its icon (run from an agent session)
+  close       --thread ID [--chat ID]: archive a topic
   statusline  <outfile>: Claude Code statusLine command that records rate limits for /usage
 """
 
@@ -25,7 +26,7 @@ def main(argv=None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     command = argv.pop(0) if argv and (not argv[0].startswith("-") or argv[0] in ("-h", "--help")) else "run"
-    if command not in ("run", "setup", "uninstall", "topic-edit", "statusline"):
+    if command not in ("run", "setup", "uninstall", "topic-edit", "statusline", "close"):
         sys.stderr.write(USAGE)
         return 0 if command in ("-h", "--help") else 2
     if command == "setup":
@@ -37,6 +38,9 @@ def main(argv=None) -> int:
     if command == "topic-edit":
         from agent2telegramtopic import topicedit
         return topicedit.main(argv)
+    if command == "close":
+        from agent2telegramtopic import control
+        return control.close_main(argv)
     if command == "statusline":
         from agent2telegramtopic import statusline
         return statusline.main(argv)

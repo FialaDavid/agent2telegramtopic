@@ -236,6 +236,48 @@ def test_routed_close_for_parked_lane_archives_without_slot_activation(world, tm
     assert not activated
 
 
+def test_control_spool_closes_parked_lane_when_telegram_send_fails(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    bridge.stop()
+    mux._lanes.clear()
+    mux._started_lanes.clear()
+    mux.lane_store.set_status(KEY, "parked")
+    client.send_message = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("thread not found"))
+    spool = tmp_path / "state" / "bot" / "control"
+    spool.mkdir(parents=True)
+    request = spool / "close.json"
+    request.write_text(json.dumps({"action": "close", "chat": KEY.chat_id,
+                                   "thread": KEY.thread_id, "requested_at": time.time()}))
+    worker = threading.Thread(target=mux._control_loop, daemon=True)
+    worker.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and mux.lane_store.get(KEY).status != "archived":
+        time.sleep(0.02)
+    mux.stop()
+    worker.join(timeout=1)
+    assert mux.lane_store.get(KEY).status == "archived"
+    assert records(tmp_path)
+    assert bridge._session.commands == []
+    assert not request.exists()
+
+
+def test_control_spool_discards_malformed_file(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    spool = tmp_path / "state" / "bot" / "control"
+    spool.mkdir(parents=True)
+    malformed = spool / "bad.json"
+    malformed.write_text("{")
+    worker = threading.Thread(target=mux._control_loop, daemon=True)
+    worker.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and malformed.exists():
+        time.sleep(0.02)
+    mux.stop()
+    worker.join(timeout=1)
+    assert not malformed.exists()
+    assert mux.lane_store.get(KEY).status == "live"
+
+
 def test_private_summary_boundary_survives_resume_rewind(tmp_path, monkeypatch):
     from agent2telegramtopic.lane import LaneBridge
 
