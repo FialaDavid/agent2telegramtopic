@@ -362,6 +362,7 @@ class LaneBridge:
         self._internal_compacted_turn_id = None
         self._internal_timed_out = False
         self._internal_compaction_succeeded = False
+        self._internal_compaction_noop = False
         self._private_boundary = self._sent_path.parent / "private_turn_boundary"
         self._compact_ctx_before = None
         self._compact_done = self._sent_path.parent / "compact_done"
@@ -978,6 +979,7 @@ class LaneBridge:
             self._internal_turn_id = None
             self._internal_compacted_turn_id = None
             self._internal_compaction_succeeded = False
+            self._internal_compaction_noop = False
             self._internal_kind = kind
             self._summary_text = ""
             self._summary_error = None
@@ -1028,6 +1030,12 @@ class LaneBridge:
                  self._compact_ctx_before, after)
         if after is not None and self._lane_store is not None:
             self._lane_store.mark_compacted(self.key, time.time(), after)
+        self._compact_ctx_before = None
+
+    def _record_internal_compaction_noop(self) -> None:
+        lane = self._lane_store.get(self.key) if self._lane_store is not None else None
+        if lane is not None:
+            self._lane_store.mark_compacted(self.key, time.time(), lane.ctx_tokens)
         self._compact_ctx_before = None
 
     def _expire_internal_turn(self, done: threading.Event) -> None:
@@ -1478,6 +1486,7 @@ class LaneBridge:
                     if (rec.get("type") == "system" and rec.get("subtype") == "local_command"
                             and "Not enough messages to compact." in str(rec.get("content", ""))):
                         self._tpos += consumed
+                        self._internal_compaction_noop = True
                         self._finish_turn()
                         return
                     # Codex's rollout compacted record has no turn_id. Its task_started
@@ -1507,6 +1516,7 @@ class LaneBridge:
                         and rec.get("subtype") == "local_command"
                         and "Not enough messages to compact." in str(rec.get("content", ""))):
                     self._tpos += consumed
+                    self._internal_compaction_noop = True
                     self._finish_turn()
                     return
                 for ev in self._reader.parse(rec):
@@ -1756,6 +1766,8 @@ class LaneBridge:
         if internal:
             if self._internal_kind == "compact" and self._internal_compaction_succeeded:
                 self._record_internal_compaction()
+            elif self._internal_kind == "compact" and self._internal_compaction_noop:
+                self._record_internal_compaction_noop()
             # Delta (10.10): discard the entire internal-command tail, including a Codex
             # task_complete that follows its compacted record, before queued prompts resume.
             if self._transcript and self._transcript.exists():
@@ -1768,6 +1780,7 @@ class LaneBridge:
             self._internal_turn = False
             self._internal_turn_id = None
             self._internal_compacted_turn_id = None
+            self._internal_compaction_noop = False
         self._pending_turn_end = False
         self._consume_turn_end()
         if was_active:

@@ -160,3 +160,51 @@ def test_watcher_delivers_internal_compact_without_telegram(tmp_path):
     assert store.get(key).last_compact is not None
     assert watcher.tick() == []
     assert session.commands == ["/compact"]
+
+
+def test_noop_compaction_does_not_restart_after_next_idle_window(tmp_path):
+    from agent2telegramtopic.config import lane_state_dir
+    from agent2telegramtopic.lane import LaneBridge
+
+    class Telegram:
+        def send_message(self, *args, **kwargs):
+            pass
+
+        def send_chat_action(self, *args, **kwargs):
+            pass
+
+    class Session:
+        def __init__(self):
+            self.commands = []
+            self.submitted = threading.Event()
+
+        def send_command(self, command):
+            self.commands.append(command)
+            self.submitted.set()
+
+    key = LaneKey(123, 9)
+    store = LaneStore(":memory:")
+    store.upsert(make_lane(thread_id=9, last_activity=1000))
+    session = Session()
+    state = lane_state_dir("test", key.chat_id, key.thread_id, tmp_path)
+    state.mkdir(parents=True)
+    bridge = LaneBridge(Telegram(), key, state / "sent", state / "queue",
+                        agent="codex", session=session, lane_store=store)
+    bridge._transcript = tmp_path / "rollout.jsonl"
+    bridge._transcript.write_text("")
+    bridge._last_resolve = float("inf")
+    now = [1000 + 46 * 60]
+    watcher = IdleWatcher(store, lambda _key: bridge, lambda _bridge: 40000,
+                          clock=lambda: now[0])
+
+    assert watcher.tick() == [key]
+    assert session.submitted.wait(1)
+    with bridge._transcript.open("a") as stream:
+        stream.write(json.dumps({"type": "system", "subtype": "local_command",
+                                 "content": "Not enough messages to compact."}) + "\n")
+    bridge.outbound_tick()
+    row = store.get(key)
+    now[0] = row.last_activity + 46 * 60
+
+    assert watcher.tick() == []
+    assert session.commands == ["/compact"]

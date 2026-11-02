@@ -141,6 +141,31 @@ def test_close_archives_the_topic_with_the_agents_summary(world, tmp_path, agent
     assert len(client.sent) == 1
 
 
+def test_close_compaction_start_failure_still_archives(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    mux.lane_store.set_ctx_tokens(KEY, 40000)
+    bridge.compact_internal = lambda: None
+
+    close_and_wait(bridge, client, mux)
+
+    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert mux.lane_store.get(KEY).status == "archived"
+    assert records(tmp_path)[0]["summary"] == SUMMARY
+
+
+def test_close_compaction_timeout_still_archives(world, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "CLOSE_COMPACTION_TIMEOUT", 0.01)
+    mux, bridge, client = world("claude-code")
+    mux.lane_store.set_ctx_tokens(KEY, 40000)
+    bridge.compact_internal = threading.Event
+
+    close_and_wait(bridge, client, mux)
+
+    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert mux.lane_store.get(KEY).status == "archived"
+    assert records(tmp_path)[0]["summary"] == SUMMARY
+
+
 def test_summary_that_never_arrives_still_archives_with_null_summary(world, tmp_path, monkeypatch):
     monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.3)
     mux, bridge, client = world("claude-code", answer=None)

@@ -29,6 +29,9 @@ import uuid
 import shutil
 import subprocess
 
+CLOSE_COMPACTION_TIMEOUT = 300
+log = logging.getLogger("agent2telegramtopic.app")
+
 
 def _expected_agent_commands(config: Config) -> list[str]:
     """Return unique executable basenames used to recognize the configured agent TUI."""
@@ -155,6 +158,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 return
             def park_after_command():
                 bridge._closing = True
+                log.info("close %s started", key)
                 # The /close command itself is still owned by the inbound worker.
                 # Wait for only that in-flight command; queued updates stay durable
                 # for the resumed lane.
@@ -182,35 +186,48 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                         summary_error = "the agent returned no summary"
                     else:
                         summary = bridge._summary_text
+                log.info("close %s summary result: %s", key,
+                         "ok" if summary is not None else f"error: {summary_error or 'skipped'}")
                 if bridge._internal_timed_out and session_obj is not None and session_alive():
                     bridge._closing = False
                     lane_store.set_status(key, "live")
                     lane_store.set_busy(key, False)
+                    log.info("close %s final status: live", key)
                     bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
                     return
                 if session_obj is not None:
-                    if session_alive() and lane_store.get(key).ctx_tokens >= config.compact_min_tokens:
+                    if not session_alive() or lane_store.get(key).ctx_tokens < config.compact_min_tokens:
+                        log.info("close %s compaction: skipped", key)
+                    else:
                         event = bridge.compact_internal()
                         if event is None:
-                            bridge._closing = False
-                            return
-                        if not event.wait(300):
-                            bridge._closing = False
-                            return
+                            log.warning("close %s compaction could not start; continuing", key)
+                            log.info("close %s compaction: failed-continuing", key)
+                        elif not event.wait(CLOSE_COMPACTION_TIMEOUT) or bridge._internal_timed_out:
+                            log.warning("close %s compaction did not complete; continuing", key)
+                            log.info("close %s compaction: failed-continuing", key)
+                        else:
+                            log.info("close %s compaction: done", key)
                     try:
                         session_obj.close()
+                        log.info("close %s session close result: ok", key)
                     except Exception:
                         log.exception("could not close lane %s", key)
+                        log.info("close %s session close result: error", key)
                     if session_alive():
                         bridge._closing = False
                         lane_store.set_status(key, "live")
                         lane_store.set_busy(key, False)
+                        log.info("close %s final status: live", key)
                         bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
                         return
+                else:
+                    log.info("close %s compaction: skipped", key)
+                    log.info("close %s session close result: skipped", key)
                 try:
                     lane_row = lane_store.get(key)
                     transcript_path = bridge._transcript if bridge._transcript and bridge._transcript.exists() else None
-                    archive.write_archive(state_dir / "archive", {
+                    archive_path = archive.write_archive(state_dir / "archive", {
                         "bot": config.bot_name, "chat": key.chat_id, "thread": key.thread_id,
                         "title": lane_store.topic_titles().get(key),
                         "agent": config.agent_kind,
@@ -222,12 +239,15 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     })
                 except Exception:
                     log.exception("could not write the archive record for %s", key)
+                    log.info("close %s archive exception", key)
                     lane_store.set_status(key, "parked")
                     lane_store.set_busy(key, False)
                     mux._retire_parked_lane(key, bridge)
                     bridge.stop()
                     bridge.tg.send_message(key.chat_id, "⚠️ Couldn't close this topic's session. Try again.")
+                    log.info("close %s final status: parked", key)
                     return
+                log.info("close %s archive written: %s", key, archive_path)
                 with mux._lane_lock:
                     try:
                         inbox = bridge._ensure_inbox()
@@ -243,6 +263,7 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                 mux._slot_wakeup.set()
                 bridge.tg.send_message(
                     key.chat_id, "🗄️ Archived. You can delete this topic; writing here again resumes the session.")
+                log.info("close %s final status: %s", key, "waiting" if pending else "archived")
             threading.Thread(target=park_after_command, daemon=True).start()
         bridge._on_close = close_lane
         bridge_ref["bridge"] = bridge
