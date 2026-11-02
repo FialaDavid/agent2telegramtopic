@@ -86,6 +86,10 @@ when no message is waiting; streaming and unrecognised screens are ignored.
 
 Other `/commands` are passed through to the agent.
 
+To hand a message to a topic's agent from a local automation, run
+`agent2telegramtopic send --thread ID [--chat ID] (--text TEXT | --text-file PATH)`.
+The bridge posts the message in the topic and delivers it through that lane's inbound queue.
+
 ## Requirements
 
 - **macOS or Linux.** Linux needs `systemd --user` for the background service (without it, run

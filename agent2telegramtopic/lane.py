@@ -444,6 +444,17 @@ class LaneBridge:
                 self._inbound_inflight().add(record_id)
             self._inbound_queue.put((upd, record_id))
 
+    def store_control_text(self, text: str, sender_id: int):
+        """Store a locally requested message for delivery through the inbound worker."""
+        inbox = self._ensure_inbox()
+        if inbox is None:
+            return None
+        update = {"update_id": time.time_ns(), "message": {"text": text, "chat": {"id": self.key.chat_id},
+                               "message_thread_id": self.key.thread_id,
+                               "from": {"id": sender_id}}}
+        record_id = inbox.reserve(update)
+        return update, record_id
+
     # Ported from agent2telegram attach.py:1385 (MIT).
     def _inbound_inflight(self) -> set:
         if not hasattr(self, "_inflight_ids"):

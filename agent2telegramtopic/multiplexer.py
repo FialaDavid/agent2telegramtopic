@@ -86,16 +86,46 @@ class Multiplexer:
                     continue
                 path.unlink(missing_ok=True)
                 try:
-                    if request.get("action") != "close" or type(request.get("chat")) is not int or type(request.get("thread")) is not int:
-                        raise ValueError("invalid close request")
+                    if not isinstance(request, dict):
+                        raise ValueError("invalid control request")
+                    action = request.get("action")
+                    if type(request.get("chat")) is not int or type(request.get("thread")) is not int:
+                        raise ValueError("invalid control request")
                     key = routing.LaneKey(request["chat"], request["thread"])
                     row = self.lane_store.get(key)
                     if row is None or row.status == "archived":
                         continue
                     lane = self._lane(key)
-                    callback = getattr(lane, "_on_close", None)
-                    if callable(callback):
-                        callback(key)
+                    if action == "close":
+                        callback = getattr(lane, "_on_close", None)
+                        if callable(callback):
+                            callback(key)
+                    elif action == "send":
+                        text = request.get("text")
+                        requested_at = request.get("requested_at")
+                        if (not isinstance(text, str) or not text or len(text) > 4000
+                                or type(requested_at) not in (int, float)):
+                            raise ValueError("invalid send request")
+                        try:
+                            self.client.send_message(key, f"🤖 {text}", parse_mode=None)
+                        except Exception:
+                            self.log.exception("could not post control message for %s", key)
+                        stored = lane.store_control_text(text, min(self.allowed))
+                        if stored is None:
+                            raise ValueError("could not store control message")
+                        update, record_id = stored
+                        with self._lane_lock:
+                            started = key in self._started_lanes and row.status == "live"
+                            if started:
+                                lane._submit_inbound_update(update, record_id)
+                            else:
+                                self.lane_store.set_status(key, "waiting")
+                                self.lane_store.set_busy(key, False)
+                                self._slot_wakeup.set()
+                    else:
+                        raise ValueError("invalid control request")
+                except ValueError as exc:
+                    self.log.warning("ignoring malformed control request %s: %s", path.name, exc)
                 except Exception:
                     self.log.exception("could not process control request %s", path.name)
 

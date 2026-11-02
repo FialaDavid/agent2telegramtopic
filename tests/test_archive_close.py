@@ -22,7 +22,7 @@ class Client:
     def __init__(self, token=None):
         self.sent = []
 
-    def send_message(self, key, text):
+    def send_message(self, key, text, **kwargs):
         self.sent.append((key, text))
 
     def send_chat_action(self, key, action):
@@ -56,6 +56,9 @@ class Session:
                 f.write(json.dumps(record) + "\n")
         if self.agent == "claude-code":
             self.bridge._turn_end.touch()
+
+    def inject(self, text, origin_prefix=True):
+        self.commands.append(text)
 
     def dialog_snapshot(self):
         return "", True
@@ -292,6 +295,60 @@ def test_control_spool_discards_malformed_file(world, tmp_path):
     worker.join(timeout=1)
     assert not malformed.exists()
     assert mux.lane_store.get(KEY).status == "live"
+
+
+def run_control_request(mux, tmp_path, request, timeout=5):
+    spool = tmp_path / "state" / "bot" / "control"
+    spool.mkdir(parents=True, exist_ok=True)
+    path = spool / "send.json"
+    path.write_text(json.dumps(request))
+    worker = threading.Thread(target=mux._control_loop, daemon=True)
+    worker.start()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and path.exists():
+        time.sleep(0.02)
+    return worker, path
+
+
+def test_send_control_request_posts_and_delivers_through_live_inbound_worker(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    mux._lanes[KEY] = bridge
+    mux._started_lanes.add(KEY)
+    bridge._start_inbound_worker()
+    worker, path = run_control_request(mux, tmp_path, {"action": "send", "chat": KEY.chat_id,
+        "thread": KEY.thread_id, "text": "automation prompt", "requested_at": time.time()})
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bridge._session.commands:
+        time.sleep(0.02)
+    mux.stop()
+    worker.join(timeout=1)
+    assert not path.exists()
+    assert client.sent[0] == (KEY, "🤖 automation prompt")
+    assert bridge._session.commands == ["automation prompt"]
+
+
+def test_send_control_request_resumes_parked_lane_and_send_failure_does_not_block_delivery(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    mux._lanes[KEY] = bridge
+    mux.lane_store.set_status(KEY, "parked")
+    mux._start_lane = lambda key: (mux._started_lanes.add(key), bridge._start_inbound_worker(),
+                                   bridge._replay_pending_inbound())
+    client.send_message = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("send failed"))
+    worker, path = run_control_request(mux, tmp_path, {"action": "send", "chat": KEY.chat_id,
+        "thread": KEY.thread_id, "text": "resume prompt", "requested_at": time.time()})
+    mux._slot_loop = lambda: mux._start_lane(KEY)
+    mux._slot_wakeup.set()
+    mux.lane_store.set_status(KEY, "waiting")
+    slot = threading.Thread(target=mux._slot_loop, daemon=True)
+    slot.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not bridge._session.commands:
+        time.sleep(0.02)
+    mux.stop()
+    worker.join(timeout=1)
+    slot.join(timeout=1)
+    assert not path.exists()
+    assert bridge._session.commands == ["resume prompt"]
 
 
 def test_private_summary_boundary_survives_resume_rewind(tmp_path, monkeypatch):
