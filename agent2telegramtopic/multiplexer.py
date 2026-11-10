@@ -106,10 +106,6 @@ class Multiplexer:
                         if (not isinstance(text, str) or not text or len(text) > 4000
                                 or type(requested_at) not in (int, float)):
                             raise ValueError("invalid send request")
-                        try:
-                            self.client.send_message(key, f"🤖 {text}", parse_mode=None)
-                        except Exception:
-                            self.log.exception("could not post control message for %s", key)
                         stored = lane.store_control_text(text, min(self.allowed))
                         if stored is None:
                             raise ValueError("could not store control message")
@@ -122,6 +118,13 @@ class Multiplexer:
                                 self.lane_store.set_status(key, "waiting")
                                 self.lane_store.set_busy(key, False)
                                 self._slot_wakeup.set()
+                    elif action == "notify":
+                        text = request.get("text")
+                        requested_at = request.get("requested_at")
+                        if (not isinstance(text, str) or not text or len(text) > 4000
+                                or type(requested_at) not in (int, float)):
+                            raise ValueError("invalid notify request")
+                        self.client.send_message(key, text)
                     elif action == "restart":
                         requested_at = request.get("requested_at")
                         if type(requested_at) not in (int, float):

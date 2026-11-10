@@ -15,7 +15,8 @@ commands:
   topic-edit  "<name>" "<emoji>": rename the current topic and set its icon (run from an agent session)
   close       --thread ID [--chat ID]: archive a topic
   restart     --thread ID [--chat ID]: restart a topic's agent session and resume the conversation
-  send        --thread ID [--chat ID] (--text TEXT | --text-file PATH): send text to a topic's agent
+  send        --thread ID [--chat ID] (--text TEXT | --text-file PATH): hand a task to a topic's agent (nothing is posted in the topic)
+  notify      --thread ID [--chat ID] (--text TEXT | --text-file PATH): post a system notification in a topic (the agent is not woken)
   statusline  <outfile>: Claude Code statusLine command that records rate limits for /usage
 """
 
@@ -28,7 +29,7 @@ def main(argv=None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     command = argv.pop(0) if argv and (not argv[0].startswith("-") or argv[0] in ("-h", "--help")) else "run"
-    if command not in ("run", "setup", "uninstall", "topic-edit", "statusline", "close", "send", "restart"):
+    if command not in ("run", "setup", "uninstall", "topic-edit", "statusline", "close", "send", "notify", "restart"):
         sys.stderr.write(USAGE)
         return 0 if command in ("-h", "--help") else 2
     if command == "setup":
@@ -46,6 +47,9 @@ def main(argv=None) -> int:
     if command == "send":
         from agent2telegramtopic import control
         return control.send_main(argv)
+    if command == "notify":
+        from agent2telegramtopic import control
+        return control.notify_main(argv)
     if command == "restart":
         from agent2telegramtopic import control
         return control.restart_main(argv)

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from agent2telegramtopic.control import write_close, write_restart, write_send
+from agent2telegramtopic.control import write_close, write_notify, write_restart, write_send
 
 
 def test_control_request_is_atomic_json_with_required_fields(tmp_path):
@@ -18,6 +18,14 @@ def test_send_control_request_is_atomic_and_contains_text(tmp_path):
     path = write_send('bot', 4, 9, 'hello', home=tmp_path)
     data = json.loads(path.read_text())
     assert data == {"action": "send", "chat": 4, "thread": 9, "text": "hello",
+                    "requested_at": data["requested_at"]}
+    assert not list(path.parent.glob('*.tmp'))
+
+
+def test_notify_control_request_is_atomic_and_contains_text(tmp_path):
+    path = write_notify('bot', 4, 9, 'hello', home=tmp_path)
+    data = json.loads(path.read_text())
+    assert data == {"action": "notify", "chat": 4, "thread": 9, "text": "hello",
                     "requested_at": data["requested_at"]}
     assert not list(path.parent.glob('*.tmp'))
 
@@ -83,6 +91,37 @@ def test_send_cli_resolves_lane_and_rejects_missing_archived_and_invalid_text(tm
     too_long_file = tmp_path / "too-long.txt"
     too_long_file.write_text("x" * 4001)
     assert control.send_main(["--thread", "9", "--chat", "4", "--text-file", str(too_long_file)]) == 2
+
+
+def test_notify_cli_resolves_lane_and_rejects_missing_archived_and_invalid_text(tmp_path, monkeypatch, capsys):
+    from agent2telegramtopic import control, config
+    from agent2telegramtopic.config import Config
+    from agent2telegramtopic.state import Lane, LaneStore
+
+    db = tmp_path / "bot.db"
+    store = LaneStore(db)
+    store.upsert(Lane(4, 9, "topic 9", "claude-code", "", "parked", False, 1, None, 0))
+    store.upsert(Lane(5, 9, "topic 9", "claude-code", "", "waiting", False, 1, None, 0))
+    store.upsert(Lane(4, 10, "topic 10", "claude-code", "", "archived", False, 1, None, 0))
+    store._db.close()
+    monkeypatch.setattr(config, "load_config", lambda: {})
+    monkeypatch.setattr(config, "build_config", lambda raw: Config("bot", "claude-code", frozenset({8})))
+    monkeypatch.setattr(config, "state_db_path", lambda bot: db)
+    monkeypatch.setattr(control, "control_dir", lambda bot, home=None: tmp_path / "control")
+
+    assert control.notify_main(["--thread", "9", "--chat", "4", "--text", "hello"]) == 0
+    item, = (tmp_path / "control").glob("*.json")
+    request = json.loads(item.read_text())
+    assert request["action"] == "notify" and request["text"] == "hello"
+    assert (request["chat"], request["thread"]) == (4, 9)
+    assert control.notify_main(["--thread", "11", "--text", "hello"]) == 2
+    assert control.notify_main(["--thread", "9", "--text", "hello"]) == 2
+    assert control.notify_main(["--thread", "10", "--text", "hello"]) == 2
+    assert control.notify_main(["--thread", "9", "--chat", "4", "--text", ""]) == 2
+    assert control.notify_main(["--thread", "9", "--chat", "4", "--text", "x" * 4001]) == 2
+    too_long_file = tmp_path / "too-long.txt"
+    too_long_file.write_text("x" * 4001)
+    assert control.notify_main(["--thread", "9", "--chat", "4", "--text-file", str(too_long_file)]) == 2
 
 
 def test_restart_cli_accepts_only_unique_live_lane(tmp_path, monkeypatch, capsys):
