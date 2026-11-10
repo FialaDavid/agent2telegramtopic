@@ -9,6 +9,8 @@ and the conversation is still there. The bridge runs as a background service
 (launchd user agent on macOS, `systemd --user` unit on Linux) and uses only the Python standard
 library.
 
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+
 > Ported from [Agent2Telegram](https://github.com/petrludwig-collab/Agent2Telegram) by Petr
 > Ludwig and contributors (MIT). Sixteen modules (the setup wizard included) are ported from it and keep a
 > `Ported from agent2telegram (MIT)` header; the topic multiplexer, durable queue, lane

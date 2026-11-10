@@ -12,7 +12,7 @@ compaction, title change).
 {
   "schema": 1,
   "bot": "ExampleBot",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "pid": 12345,
   "config": "/abs/path/config.json",
   "tmux_tmpdir": "/abs/path/tmux",
