@@ -39,6 +39,10 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 - **Files both ways.** Photos and documents you send are saved for the agent. The agent sends a
   file back by writing `[tg-file] /path/to/file` on its own line (the file must be inside the
   bot's outbox folder or a folder listed in `outbox_dirs`).
+- **Answer buttons.** Add `[tg-buttons] option 1 | option 2` to an agent reply to show up to 12
+  choices. Buttons are arranged in rows; tapping one sends its label as your message, and the
+  chosen answer remains visible as `✓ label`. Buttons expire when a new button prompt or your
+  message arrives, when the topic is parked, and after a bridge restart.
 - **Reactions.** Reacting to a message with an emoji sends the agent a quick-feedback prompt
   and it answers with a one-liner.
 - **Voice (optional, ElevenLabs).** Voice notes are transcribed with ElevenLabs Scribe;

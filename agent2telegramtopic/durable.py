@@ -65,6 +65,7 @@ class Record:
     update: dict[str, Any] | None = None
     chunks: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
+    buttons: tuple[str, ...] = ()
     key: str | None = None
     sent_chunks: frozenset[int] = frozenset()
     sent_files: frozenset[str] = frozenset()
@@ -192,6 +193,7 @@ def _record_from_data(data: dict[str, Any], expected_kind: str) -> Record:
 
     chunks = data.get("chunks")
     files = data.get("files")
+    buttons = data.get("buttons", [])
     sent_chunks = data.get("sent_chunks", [])
     sent_files = data.get("sent_files", [])
     key = data.get("key")
@@ -202,6 +204,8 @@ def _record_from_data(data: dict[str, Any], expected_kind: str) -> Record:
         raise CorruptRecordError("outbox chunks are invalid")
     if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
         raise CorruptRecordError("outbox files are invalid")
+    if not isinstance(buttons, list) or not all(isinstance(item, str) for item in buttons):
+        raise CorruptRecordError("outbox buttons are invalid")
     if not isinstance(sent_chunks, list) or not all(isinstance(item, int) for item in sent_chunks):
         raise CorruptRecordError("sent chunk indexes are invalid")
     if not isinstance(sent_files, list) or not all(isinstance(item, str) for item in sent_files):
@@ -224,6 +228,7 @@ def _record_from_data(data: dict[str, Any], expected_kind: str) -> Record:
         last_error=last_error,
         chunks=tuple(chunks),
         files=tuple(files),
+        buttons=tuple(buttons),
         key=key,
         sent_chunks=sent_chunk_set,
         sent_files=sent_file_set,
@@ -643,6 +648,7 @@ class DurableOutbox(_DurableStore):
         files: list[str],
         key: str | None,
         chat: int | None = None,
+        buttons: list[str] | None = None,
     ) -> str:
         if not isinstance(chunks, list) or not all(isinstance(item, str) for item in chunks):
             raise TypeError("chunks must be a list of strings")
@@ -660,6 +666,10 @@ class DurableOutbox(_DurableStore):
             raise TypeError("key must be a string or None")
         if chat is not None and (isinstance(chat, bool) or not isinstance(chat, int)):
             raise TypeError("chat must be an int or None")
+        if buttons is not None and (not isinstance(buttons, list) or
+                                    not all(isinstance(item, str) for item in buttons)):
+            raise TypeError("buttons must be a list of strings or None")
+        normalized_buttons = list(buttons or [])
         if not chunks and not normalized_files:
             raise ValueError("an outbox record must contain a chunk or a file")
 
@@ -671,6 +681,7 @@ class DurableOutbox(_DurableStore):
                     if (
                         existing.chunks != tuple(chunks)
                         or existing.files != tuple(normalized_files)
+                        or existing.buttons != tuple(normalized_buttons)
                         or (existing.chat is not None and chat is not None
                             and existing.chat != chat)
                     ):
@@ -692,6 +703,7 @@ class DurableOutbox(_DurableStore):
                 "last_error": None,
                 "chunks": list(chunks),
                 "files": normalized_files,
+                "buttons": normalized_buttons,
                 "key": key,
                 "chat": chat,
                 "sent_chunks": [],

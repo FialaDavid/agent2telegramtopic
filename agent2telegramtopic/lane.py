@@ -52,6 +52,7 @@ BOT_COMMANDS = [
     {"command": "id", "description": "Show your Telegram id"},
     {"command": "close", "description": "Archive this topic (summary saved; writing again resumes)"},
 ]
+BUTTONS_MARKER = "[tg-buttons]"
 
 NEW_TOPIC_HINT = (
     "\n\n(New topic: name it after the subject of this message with a short name in the user's "
@@ -250,9 +251,19 @@ class LaneTelegram:
         self._activity()
         return result
 
+    def send_message_with_keyboard(self, chat, text, rows):
+        del chat
+        result = self._record(self.client.send_message_with_keyboard(self.key, text, rows))
+        self._activity()
+        return result
+
     def edit_clear_keyboard(self, chat, message_id, text):
         del chat
         return self.client.edit_clear_keyboard(self.key, message_id, text)
+
+    def edit_reply_markup(self, chat, message_id, rows):
+        del chat
+        return self.client.edit_reply_markup(self.key, message_id, rows)
 
     def send_file(self, chat, path, **kwargs):
         del chat
@@ -312,6 +323,8 @@ class LaneBridge:
         except OSError:
             self._sent_keys = set()
         self._outbox = None
+        self._answer_buttons_lock = threading.Lock()
+        self._answer_buttons = None
         self._status = {"mid": None, "shown": ""}   # live one-line tool-call status bubble
         # Persist the bubble's message_id so a restart/crash mid-turn can delete the orphan it
         # would otherwise leave behind in the chat.
@@ -1440,6 +1453,43 @@ class LaneBridge:
             self._refresh_after_key()
             return None
 
+    def handle_answer_callback(self, cq: dict) -> tuple[str | None, str | None]:
+        """Validate an answer button tap and return its label without changing the keyboard."""
+        with self._answer_buttons_lock:
+            stored = self._answer_buttons
+        message = cq.get("message") or {}
+        chat = message.get("chat") or {}
+        data = cq.get("data")
+        if (stored is None or chat.get("id") != self.key.chat_id
+                or message.get("message_id") != stored[0] or data not in stored[2]):
+            return "Tahle volba už neplatí.", None
+        index = stored[2].index(data)
+        label = stored[1][index]
+        return None, label
+
+    def confirm_answer(self, message_id: int, label: str) -> None:
+        """Show the accepted answer and clear the matching active keyboard state."""
+        with self._answer_buttons_lock:
+            stored = self._answer_buttons
+        if stored is None or stored[0] != message_id:
+            return
+        self.tg.edit_reply_markup(self.key, message_id, [[{
+            "text": f"✓ {label}", "callback_data": "ab:done"}]
+        ])
+        with self._answer_buttons_lock:
+            if self._answer_buttons is stored:
+                self._answer_buttons = None
+
+    def _invalidate_answer_buttons(self) -> None:
+        with self._answer_buttons_lock:
+            stored = self._answer_buttons
+        if stored is None:
+            return
+        self.tg.edit_reply_markup(self.key, stored[0], [])
+        with self._answer_buttons_lock:
+            if self._answer_buttons is stored:
+                self._answer_buttons = None
+
     def _move_to(self, bubble, now, target: int) -> bool:
         """Move the highlight to option `target` and PROVE it is there before Enter is sent."""
         step = target - now.highlighted
@@ -1949,6 +1999,10 @@ class LaneBridge:
 
     def stop(self) -> None:
         """Stop this bridge's background workers before its session is retired."""
+        try:
+            self._invalidate_answer_buttons()
+        except Exception as e:
+            log.warning("could not invalidate answer buttons while stopping: %s", type(e).__name__)
         self._stop.set()
         self._internal_turn_done.set()
 
@@ -2540,6 +2594,7 @@ class LaneBridge:
         """Forward one reply RELIABLY. Marks the dedup ledger only AFTER a confirmed send; on any
         send failure the reply is queued to disk and the outbound loop keeps retrying until Telegram
         confirms. Order is preserved: if anything is already queued, this appends behind it."""
+        text, buttons = self._extract_buttons(text)
         contains_file_marker = bool(getattr(self.cfg, "file_marker", "[tg-file]") and
                                     getattr(self.cfg, "file_marker", "[tg-file]").lower() in text.lower())
         if getattr(self.cfg, "file_marker", "[tg-file]") and \
@@ -2548,9 +2603,9 @@ class LaneBridge:
         else:
             extracted = []
         files = extracted
-        if (not text and not files) or (key and key in self._sent_keys):
+        if (not text and not files and not buttons) or (key and key in self._sent_keys):
             return
-        if turn_text and text and self._voice_reply_on() and not contains_file_marker:
+        if turn_text and text and self._voice_reply_on() and not contains_file_marker and not buttons:
             if len(text) > VOICE_MAX_CHARS:
                 text = f"{text}\n\n🗣️→📝 (too long to read aloud — sent as text)"
             elif self._try_send_voice(text):
@@ -2564,9 +2619,9 @@ class LaneBridge:
         if outbox is None:
             log.error("durable outbox unavailable; outgoing reply was not sent")
             return
-        chunks = split_message(text)
+        chunks = split_message(text or ("Vyberte:" if buttons else ""))
         try:
-            outbox.enqueue(chunks, files or [], key, chat=self.key.chat_id)
+            outbox.enqueue(chunks, files or [], key, chat=self.key.chat_id, buttons=buttons or None)
         except Exception as e:
             log.error("could not persist the outgoing reply; reply is lost: %s", e)
             return
@@ -2597,7 +2652,24 @@ class LaneBridge:
                 continue
             for index, chunk in rec.pending_chunks:
                 try:
-                    self.tg.send_message(rec.chat, chunk)
+                    if rec.buttons and index == len(rec.chunks) - 1:
+                        tokens = ["ab:" + secrets.token_hex(4) for _ in rec.buttons]
+                        rows, row, row_chars = [], [], 0
+                        for label, token in zip(rec.buttons, tokens):
+                            if row and (len(row) >= 5 or row_chars + len(label) > 28):
+                                rows.append(row)
+                                row, row_chars = [], 0
+                            row.append({"text": _button_label(label), "callback_data": token})
+                            row_chars += len(label)
+                        if row:
+                            rows.append(row)
+                        message_id = self.tg.send_message_with_keyboard(
+                            rec.chat, chunk or "Vyberte:", rows)
+                        self._invalidate_answer_buttons()
+                        with self._answer_buttons_lock:
+                            self._answer_buttons = (message_id, rec.buttons, tuple(tokens))
+                    else:
+                        self.tg.send_message(rec.chat, chunk)
                 except Exception as e:
                     log.warning("delivery of part %d still failing: error=%s %s",
                                 index, type(e).__name__, message_metadata(chunk))
@@ -2671,6 +2743,22 @@ class LaneBridge:
                 continue
             keep.append(line)
         return "\n".join(keep).strip(), wanted
+
+    def _extract_buttons(self, text: str):
+        keep, buttons = [], []
+        found = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith(BUTTONS_MARKER):
+                found = True
+                buttons = [label.strip() for label in stripped[len(BUTTONS_MARKER):].split("|")
+                           if label.strip()]
+                if len(buttons) > 12:
+                    log.warning("answer buttons limited to 12 labels")
+                    buttons = buttons[:12]
+                continue
+            keep.append(line)
+        return "\n".join(keep).strip(), buttons if found else []
 
     def _send_files(self, paths: list[str]) -> None:
         for raw in paths:

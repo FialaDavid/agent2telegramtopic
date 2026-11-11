@@ -2,6 +2,11 @@
 
 All notable changes are documented here, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Add tap-to-answer buttons to agent replies using the `[tg-buttons]` marker.
+
 ## [0.4.0] - 2026-11-10
 
 ### Added

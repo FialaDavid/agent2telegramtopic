@@ -689,6 +689,11 @@ class Multiplexer:
         except Exception:
             self.log.exception("could not start lane %s; not advancing the offset", key)
             return offset
+        inbound_message = upd.get("message") or upd.get("edited_message") or {}
+        inbound_text = inbound_message.get("text")
+        if (isinstance(inbound_text, str) and not inbound_text.strip().startswith("/")
+                and inbound_message.get("from", {}).get("id") in self.allowed):
+            lane._invalidate_answer_buttons()
         inbox = lane._ensure_inbox()
         if inbox is None:
             self.log.error("update %s: durable storage unavailable, not advancing the offset", update_id)
@@ -785,7 +790,34 @@ class Multiplexer:
             with self._lane_lock:
                 lane = self._lanes.get(key) if key is not None and key in self._started_lanes else None
             if routing.is_allowed(upd, self.allowed) and lane is not None:
-                toast = lane.handle_dialog_callback(cq)
+                if str(cq.get("data", "")).startswith("ab:"):
+                    if cq.get("data") == "ab:done":
+                        toast = None
+                        label = None
+                    else:
+                        toast, label = lane.handle_answer_callback(cq)
+                    if label is not None:
+                        try:
+                            stored = lane.store_control_text(label, cq.get("from", {}).get("id"))
+                        except Exception:
+                            stored = None
+                        if stored is not None:
+                            update, record_id = stored
+                            row = self.lane_store.get(key) if self.lane_store is not None else None
+                            with self._lane_lock:
+                                started = key in self._started_lanes and (row is None or row.status == "live")
+                                if started:
+                                    lane._submit_inbound_update(update, record_id)
+                                else:
+                                    if self.lane_store is not None:
+                                        self.lane_store.set_status(key, "waiting")
+                                        self.lane_store.set_busy(key, False)
+                                    self._slot_wakeup.set()
+                            lane.confirm_answer((cq.get("message") or {}).get("message_id"), label)
+                        else:
+                            toast = "Odpověď se nepodařilo předat, napište ji prosím."
+                else:
+                    toast = lane.handle_dialog_callback(cq)
             elif routing.is_allowed(upd, self.allowed):
                 toast = "Tahle volba už neplatí."
             else:

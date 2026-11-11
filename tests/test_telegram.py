@@ -43,6 +43,31 @@ def test_rich_send_hardens_soft_line_breaks_in_markdown_payload(text, expected):
     assert json.loads(params["rich_message"]) == {"markdown": expected}
 
 
+def test_keyboard_sends_always_use_send_message_and_keep_markup_on_fallback():
+    calls = []
+    def transport(method, params):
+        calls.append((method, params))
+        if len(calls) == 1:
+            return {"ok": False, "error_code": 400, "description": "bad html"}
+        return {"ok": True, "result": {"message_id": 5}}
+    client = TelegramClient("secret", opener=TransportOpener(transport))
+    client.send_message_with_keyboard(LaneKey(12, 44), "**bold**", [[{"text": "yes", "callback_data": "ab:1"}]])
+    assert [method for method, _ in calls] == ["sendMessage", "sendMessage"]
+    assert all("reply_markup" in params for _, params in calls)
+
+
+def test_keyboard_plain_and_invalid_html_paths_keep_markup():
+    for parse_mode, text in ((None, "plain"), ("auto", "<invalid>")):
+        calls = []
+        client = TelegramClient("secret", opener=TransportOpener(
+            lambda method, params: calls.append((method, params)) or {"ok": True, "result": {"message_id": 3}}))
+        client.send_message_with_keyboard(LaneKey(12, 44), text,
+            [[{"text": "yes", "callback_data": "ab:1"}]], parse_mode=parse_mode)
+        assert len(calls) == 1
+        assert calls[0][0] == "sendMessage"
+        assert "reply_markup" in calls[0][1]
+
+
 def test_send_message_and_chat_action_route_general_and_topic():
     transport = FakeTransport()
     client = TelegramClient("secret", opener=TransportOpener(transport))

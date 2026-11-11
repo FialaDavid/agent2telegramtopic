@@ -438,6 +438,30 @@ class TelegramClient:
                 ids.append(self._message_id(self._call("sendMessage", {**base, "text": chunk}, timeout=SEND_TIMEOUT)))
         return [i for i in ids if i is not None]
 
+    def send_message_with_keyboard(self, key: LaneKey, text: str, rows: list[list[dict]],
+                                   *, parse_mode: str | None = "auto") -> int | None:
+        """Send one formatted message with an inline keyboard; failures propagate for retries."""
+        base = {**reply_params(key), "disable_web_page_preview": "true",
+                "reply_markup": json.dumps({"inline_keyboard": rows})}
+        if parse_mode == "auto":
+            html_text = markdown_to_html(text)
+            ok, reason = validate_telegram_html(html_text)
+            if not ok:
+                log.error("markdown_to_html produced invalid HTML (%s); sending plain-text fallback", reason)
+                return self._message_id(self._call("sendMessage", {**base, "text": _strip_markdown(text)},
+                                                   timeout=SEND_TIMEOUT))
+            try:
+                return self._message_id(self._call("sendMessage", {**base, "text": html_text,
+                    "parse_mode": "HTML"}, timeout=SEND_TIMEOUT))
+            except TelegramError as e:
+                log.warning("send failed with parse_mode=HTML, retrying plain: %s", e)
+                return self._message_id(self._call("sendMessage", {**base, "text": _strip_markdown(text)},
+                                                   timeout=SEND_TIMEOUT))
+        params = {**base, "text": text}
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+        return self._message_id(self._call("sendMessage", params, timeout=SEND_TIMEOUT))
+
     def get_file_path(self, file_id: str) -> str:
         return self._call("getFile", {"file_id": file_id}, timeout=20)["file_path"]
 
@@ -496,6 +520,15 @@ class TelegramClient:
             self._call("editMessageText", params, timeout=SEND_TIMEOUT)
         except TelegramError:
             pass
+
+    def edit_reply_markup(self, key: LaneKey, message_id: int, rows: list[list[dict]]) -> None:
+        """Replace only a message's inline keyboard."""
+        params = {**reply_params(key), "message_id": message_id,
+                  "reply_markup": json.dumps({"inline_keyboard": rows})}
+        try:
+            self._call("editMessageReplyMarkup", params, timeout=SEND_TIMEOUT)
+        except TelegramError as exc:
+            log.warning("could not edit inline keyboard: %s", type(exc).__name__)
 
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         params = {"callback_query_id": callback_query_id}
