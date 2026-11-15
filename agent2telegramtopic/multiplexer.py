@@ -670,6 +670,20 @@ class Multiplexer:
                 thread_id = m.get("message_thread_id", m.get("message_id"))
                 if type(thread_id) is int and thread_id != routing.GENERAL_THREAD_ID:
                     self.lane_store.mark_new_topic(routing.LaneKey(event[0].chat_id, thread_id))
+            if event is not None and event[1] in ("closed", "deleted"):
+                key, _ = event
+                row = self.lane_store.get(key) if self.lane_store is not None else None
+                if row is not None and row.status != "archived":
+                    lane = self._lane(key)
+                else:
+                    with self._lane_lock:
+                        lane = self._lanes.get(key)
+                callback = getattr(lane, "_on_close", None) if lane is not None else None
+                if callback is not None:
+                    callback(key)
+                self._mark_update_processed(update_id)
+                self._save_offset(next_offset)
+                return next_offset
         if routed is None:
             # Delta (9.3): allowed but unroutable updates are consumed without creating a lane.
             self.log.info("ignoring allowed Telegram update without a supported content route: update_id=%s %s",

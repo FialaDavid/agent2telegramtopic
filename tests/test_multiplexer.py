@@ -670,6 +670,20 @@ def test_forum_service_is_consumed_and_photo_routes_to_lane(tmp_path, caplog):
     assert not [record for record in caplog.records if record.levelno > logging.INFO]
 
 
+def test_closed_unknown_topic_is_consumed_without_creating_lane(tmp_path):
+    client = Client()
+    mux, lanes = make_mux(tmp_path, client)
+    update = {"update_id": 3, "message": {
+        "chat": {"id": 123, "type": "private"}, "message_thread_id": 99,
+        "from": {"id": 8}, "forum_topic_closed": {},
+    }}
+
+    assert mux._handle_update_once(update, 0) == 4
+    assert lanes == {}
+    assert mux._lanes == {}
+    assert mux._update_was_processed(3)
+
+
 def test_failed_reserve_stops_batch_before_later_lane(tmp_path):
     client = Client()
     mux, lanes = make_mux(tmp_path, client)

@@ -144,6 +144,29 @@ def test_close_archives_the_topic_with_the_agents_summary(world, tmp_path, agent
     assert len(client.sent) == 1
 
 
+def test_forum_topic_closed_uses_close_path(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    mux._lanes[KEY] = bridge
+    update = {"update_id": 77, "message": {
+        "chat": {"id": KEY.chat_id, "type": "private"},
+        "message_thread_id": KEY.thread_id, "from": {"id": 8},
+        "forum_topic_closed": {},
+    }}
+
+    assert mux._handle_update_once(update, 0) == 78
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not client.sent:
+        time.sleep(0.02)
+
+    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert mux.lane_store.get(KEY).status == "archived"
+    assert not bridge._session.alive
+    (record,) = records(tmp_path)
+    assert record["thread"] == KEY.thread_id
+    assert record["summary"] == SUMMARY
+    assert mux._update_was_processed(77)
+
+
 def test_close_compaction_start_failure_still_archives(world, tmp_path):
     mux, bridge, client = world("claude-code")
     mux.lane_store.set_ctx_tokens(KEY, 40000)
