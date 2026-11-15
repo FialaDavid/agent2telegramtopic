@@ -21,12 +21,19 @@ SUMMARY = "Went over the boiler.\nOutcome: fixed.\nOpen: order a spare part."
 class Client:
     def __init__(self, token=None):
         self.sent = []
+        self.deleted = []
+        self.delete_error = None
 
     def send_message(self, key, text, **kwargs):
         self.sent.append((key, text))
 
     def send_chat_action(self, key, action):
         pass
+
+    def delete_forum_topic(self, chat_id, thread_id):
+        if self.delete_error:
+            raise self.delete_error
+        self.deleted.append((chat_id, thread_id))
 
 
 class Session:
@@ -111,7 +118,7 @@ def world(monkeypatch, tmp_path):
 def close_and_wait(bridge, client, mux):
     bridge._on_close(KEY)
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and not client.sent:
+    while time.monotonic() < deadline and mux.lane_store.get(KEY).status not in ("archived", "waiting", "parked"):
         time.sleep(0.02)
     mux.status_writer.write()
 
@@ -125,7 +132,8 @@ def records(tmp_path):
 def test_close_archives_the_topic_with_the_agents_summary(world, tmp_path, agent):
     mux, bridge, client = world(agent)
     close_and_wait(bridge, client, mux)
-    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert client.sent == []
+    assert client.deleted == [(KEY.chat_id, KEY.thread_id)]
     status = json.loads((tmp_path / "state" / "bot.status.json").read_text())
     assert status["lanes"] == []
     (record,) = records(tmp_path)
@@ -140,8 +148,8 @@ def test_close_archives_the_topic_with_the_agents_summary(world, tmp_path, agent
     assert SUMMARY in markdown.read_text()
     assert mux.lane_store.get(KEY).status == "archived"
     assert not bridge._session.alive
-    # The summary question and its answer stayed inside the session: nothing but the confirmation.
-    assert len(client.sent) == 1
+    # The summary question and its answer stayed inside the session; the archived topic was deleted.
+    assert len(client.sent) == 0
 
 
 def test_close_compaction_start_failure_still_archives(world, tmp_path):
@@ -151,7 +159,8 @@ def test_close_compaction_start_failure_still_archives(world, tmp_path):
 
     close_and_wait(bridge, client, mux)
 
-    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert client.sent == []
+    assert client.deleted == [(KEY.chat_id, KEY.thread_id)]
     assert mux.lane_store.get(KEY).status == "archived"
     assert records(tmp_path)[0]["summary"] == SUMMARY
 
@@ -164,7 +173,8 @@ def test_close_compaction_timeout_still_archives(world, tmp_path, monkeypatch):
 
     close_and_wait(bridge, client, mux)
 
-    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert client.sent == []
+    assert client.deleted == [(KEY.chat_id, KEY.thread_id)]
     assert mux.lane_store.get(KEY).status == "archived"
     assert records(tmp_path)[0]["summary"] == SUMMARY
 
@@ -189,7 +199,8 @@ def test_summary_that_never_arrives_still_archives_with_null_summary(world, tmp_
     monkeypatch.setattr(lane_module, "INTERNAL_COMMAND_TIMEOUT", 0.3)
     mux, bridge, client = world("claude-code", answer=None)
     close_and_wait(bridge, client, mux)
-    assert [text for _, text in client.sent] == [CONFIRMATION]
+    assert client.sent == []
+    assert client.deleted == [(KEY.chat_id, KEY.thread_id)]
     (record,) = records(tmp_path)
     assert record["summary"] is None and record["summary_error"]
     assert mux.lane_store.get(KEY).status == "archived"
@@ -204,6 +215,16 @@ def test_summary_timeout_with_live_session_reports_failure_and_keeps_lane_live(w
     assert client.sent == [(KEY, "⚠️ Couldn't close this topic's session. Try again.")]
     assert mux.lane_store.get(KEY).status == "live"
     assert not (tmp_path / "state" / "bot" / "archive" / "index.jsonl").exists()
+
+
+def test_delete_failure_falls_back_to_notice_and_keeps_lane_archived(world, tmp_path):
+    mux, bridge, client = world("claude-code")
+    client.delete_error = RuntimeError("Telegram unavailable")
+
+    close_and_wait(bridge, client, mux)
+
+    assert client.sent == [(KEY, CONFIRMATION)]
+    assert mux.lane_store.get(KEY).status == "archived"
 
 
 def test_closing_twice_appends_instead_of_overwriting(world, tmp_path):
@@ -246,12 +267,14 @@ def test_routed_close_for_parked_lane_archives_without_slot_activation(world, tm
         "chat": {"id": 123, "type": "private"}, "message_thread_id": 42,
         "from": {"id": 8}, "text": "/close"}}, 0)
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not client.sent:
+    while time.monotonic() < deadline and not client.deleted:
         time.sleep(0.02)
     mux.stop()
     (record,) = records(tmp_path)
     assert record["summary"] is None and record["summary_error"] is None
-    assert client.sent == [(KEY, CONFIRMATION)]
+    # Close is final: the parked topic is deleted in Telegram too, no archived notice.
+    assert client.sent == []
+    assert client.deleted == [(KEY.chat_id, KEY.thread_id)]
     assert not activated
 
 
@@ -536,3 +559,5 @@ def test_message_sent_while_closing_is_still_answered(world, tmp_path, monkeypat
     (record,) = records(tmp_path)
     assert record["summary"] == SUMMARY
     assert mux.lane_store.get(KEY).status == "waiting"
+    assert client.sent == [(KEY, CONFIRMATION)]
+    assert client.deleted == []

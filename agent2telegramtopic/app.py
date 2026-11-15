@@ -282,7 +282,14 @@ def build_app(config: Config, token: str, root: str) -> Multiplexer:
                     mux._retire_parked_lane(key, bridge)
                     bridge.stop()
                 mux._slot_wakeup.set()
-                notify("🗄️ Archived. You can delete this topic; writing here again resumes the session.")
+                if pending:
+                    notify("🗄️ Archived. You can delete this topic; writing here again resumes the session.")
+                else:
+                    try:
+                        bridge.tg.client.delete_forum_topic(key.chat_id, key.thread_id)
+                    except Exception:
+                        log.warning("could not delete Telegram topic for %s", key, exc_info=True)
+                        notify("🗄️ Archived. You can delete this topic; writing here again resumes the session.")
                 log.info("close %s final status: %s", key, "waiting" if pending else "archived")
             threading.Thread(target=park_after_command, daemon=True).start()
         bridge._on_close = close_lane

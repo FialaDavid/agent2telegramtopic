@@ -82,6 +82,14 @@ def test_send_message_and_chat_action_route_general_and_topic():
     assert all(p["chat_id"] == 12 for _, p in transport.calls)
 
 
+def test_delete_forum_topic_calls_telegram_with_chat_and_thread_ids():
+    transport = FakeTransport({"ok": True, "result": True})
+    client = TelegramClient("secret", opener=TransportOpener(transport))
+
+    assert client.delete_forum_topic(12, 44) is True
+    assert transport.calls == [("deleteForumTopic", {"chat_id": 12, "message_thread_id": 44})]
+
+
 def test_long_message_is_split_in_order_with_newline_preference():
     text = ("a" * 3000) + "\n" + ("b" * 2000) + "\n" + ("c" * 1500)
     transport = FakeTransport()

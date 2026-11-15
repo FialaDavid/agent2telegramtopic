@@ -374,6 +374,12 @@ class TelegramClient:
         # Network timeout must exceed the long-poll timeout, else we'd cancel mid-poll.
         return self._call("getUpdates", params, timeout=timeout + 15)
 
+    def delete_forum_topic(self, chat_id: int, thread_id: int) -> bool:
+        return self._call("deleteForumTopic", {
+            "chat_id": chat_id,
+            "message_thread_id": thread_id,
+        })
+
     # Delta: send_message and _send_legacy return the message ids they sent (a2t returns None):
     # Telegram reaction updates carry no message_thread_id, so the lane records its sent ids.
     @staticmethod
