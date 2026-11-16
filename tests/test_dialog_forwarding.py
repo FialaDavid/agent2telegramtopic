@@ -6,7 +6,7 @@ from agent2telegramtopic.lane import INBOUND_MAX_ATTEMPTS, LaneBridge
 from agent2telegramtopic.multiplexer import Multiplexer
 from agent2telegramtopic.routing import LaneKey
 from agent2telegramtopic.session import BLOCKED_BY_OVERLAY, SessionError
-from test_dialog import NUDGE, TRUST, UNKNOWN
+from test_dialog import MODEL_PICKER, NUDGE, TRUST, UNKNOWN
 
 KEY = LaneKey(44, 12)
 
@@ -71,6 +71,14 @@ class ScreenSession:
             self.pane = self.after_enter
         else:
             self.focused = True
+
+
+class SubmittedDialogSession(ScreenSession):
+    def __init__(self):
+        super().__init__(MODEL_PICKER)
+
+    def inject(self, text, **kwargs):
+        self.injected.append(text)
 
 
 def make_lane(tmp_path, session, tg=None):
@@ -165,6 +173,25 @@ def test_escape_button_cancels(tmp_path):
     tap(lane, 101, "Zrušit (Esc)", tg)
     assert sess.keys == ["Escape"]
     assert tg.edits[-1] == (101, "✓ Zrušeno")
+
+
+def test_delivered_slash_command_is_not_replayed_after_dialog_escape(tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(lane_mod.time, "monotonic", lambda: now[0])
+    sess = SubmittedDialogSession()
+    lane, tg = make_lane(tmp_path, sess)
+    rid = deliver(lane, "/model")
+    inbox = lane._ensure_inbox()
+    assert not any(record.record_id == rid for record in inbox.pending())
+    lane._dialog_tick()
+    now[0] += 11
+    lane._dialog_tick()
+    assert tg.sent and "Select model" in tg.sent[0][0]
+    tap(lane, 101, "Zrušit (Esc)", tg)
+    lane._inbound_queue.join()
+    assert sess.keys == ["Escape"]
+    assert sess.injected == ["/model"]
+    assert not any(record.record_id == rid for record in inbox.pending())
 
 
 def test_unrecognised_dialog_offers_only_escape(tmp_path):

@@ -18,6 +18,7 @@ from agent2telegramtopic.session import (
     CLEAR, HOLDS, UNKNOWN, BLOCKED_BY_OVERLAY, SAFE_INJECTION_CHUNK_CHARS, UNCONFIRMED_SUBMIT,
     PaneView, SessionError, TmuxSession,
 )
+from test_dialog import MODEL_PICKER
 
 MESSAGE = "[TG] check the deployment notes and repair the statistics"
 
@@ -259,6 +260,13 @@ class NothingIsTypedWhereItCannotBeSeen(unittest.TestCase):
 
 
 class UncertaintyIsNeverDelivery(unittest.TestCase):
+    def test_slash_command_opening_an_interactive_dialog_is_delivered(self):
+        model_picker = PaneView(MODEL_PICKER, 0, False)
+        command_holds = PaneView("Done\n────────────────────────\n❯ /model\n────────────────────────\n",
+                                 2, True)
+        with _Harness(CLAUDE_EMPTY, on_keys={"type": command_holds, "Enter": model_picker}):
+            _session()._type_and_submit("/model")
+
     def test_a_composer_that_cannot_be_read_after_the_submit_is_not_a_delivery(self):
         with _Harness(PaneView("nothing recognisable here", 0, True)):
             self.assertFalse(_session()._confirm_submitted(MESSAGE))

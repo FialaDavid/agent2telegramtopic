@@ -30,6 +30,8 @@ import uuid
 from pathlib import Path
 from typing import NamedTuple
 
+from agent2telegramtopic import dialog
+
 log = logging.getLogger("agent2telegramtopic.session")
 
 # TUI chrome filters for the idle (screen-scraping) path. capture-pane gives plain text
@@ -660,7 +662,13 @@ class TmuxSession:
         sent = 0
         while time.monotonic() < deadline:
             time.sleep(0.4)
-            state = self._composer_state(text)
+            view = self._pane_view()
+            state = self._composer_state(text, view)
+            if (state == UNKNOWN and text.strip().startswith("/")
+                    and dialog.parse(view.text).options):
+                # 2026-11-16: slash commands such as /model submit by opening a dialog, so no
+                # empty composer may appear before the dialog takes focus.
+                return True
             if state == HOLDS:
                 seen_clear = False
                 if sent >= attempts:
