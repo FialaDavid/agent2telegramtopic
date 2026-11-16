@@ -459,7 +459,7 @@ class LaneBridge:
                 self._inbound_inflight().add(record_id)
             self._inbound_queue.put((upd, record_id))
 
-    def store_control_text(self, text: str, sender_id: int):
+    def store_control_text(self, text: str, sender_id: int, *, automatic: bool = False):
         """Store a locally requested message for delivery through the inbound worker."""
         inbox = self._ensure_inbox()
         if inbox is None:
@@ -467,6 +467,8 @@ class LaneBridge:
         update = {"update_id": time.time_ns(), "message": {"text": text, "chat": {"id": self.key.chat_id},
                                "message_thread_id": self.key.thread_id,
                                "from": {"id": sender_id}}}
+        if automatic:
+            update["_a2tt_control_send"] = True
         record_id = inbox.reserve(update)
         return update, record_id
 
@@ -740,7 +742,11 @@ class LaneBridge:
             text += NEW_TOPIC_HINT.format(command=cli_command(sys.executable))
         try:
             self._begin_turn()
-            delivered = self._inject(text)
+            if upd.get("_a2tt_control_send") is True:
+                text = f"[TG][AUTO] {text}"
+                delivered = self._inject(text, origin_prefix=False)
+            else:
+                delivered = self._inject(text)
             if delivered and name_topic_pending:
                 self._lane_store.clear_new_topic(self.key)
             if not delivered:

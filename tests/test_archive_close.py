@@ -347,7 +347,7 @@ def test_send_control_request_delivers_through_live_inbound_worker_without_posti
     worker.join(timeout=1)
     assert not path.exists()
     assert client.sent == []
-    assert bridge._session.commands == ["automation prompt"]
+    assert bridge._session.commands == ["[TG][AUTO] automation prompt"]
 
 
 def test_send_control_request_resumes_parked_lane(world, tmp_path):
@@ -370,7 +370,7 @@ def test_send_control_request_resumes_parked_lane(world, tmp_path):
     worker.join(timeout=1)
     slot.join(timeout=1)
     assert not path.exists()
-    assert bridge._session.commands == ["resume prompt"]
+    assert bridge._session.commands == ["[TG][AUTO] resume prompt"]
 
 
 def test_notify_control_request_posts_without_delivering_to_live_lane(world, tmp_path):

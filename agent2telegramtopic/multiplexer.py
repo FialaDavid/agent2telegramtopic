@@ -106,7 +106,7 @@ class Multiplexer:
                         if (not isinstance(text, str) or not text or len(text) > 4000
                                 or type(requested_at) not in (int, float)):
                             raise ValueError("invalid send request")
-                        stored = lane.store_control_text(text, min(self.allowed))
+                        stored = lane.store_control_text(text, min(self.allowed), automatic=True)
                         if stored is None:
                             raise ValueError("could not store control message")
                         update, record_id = stored

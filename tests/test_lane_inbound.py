@@ -39,9 +39,11 @@ class FakeSession:
     def __init__(self, errors=()):
         self.errors = list(errors)
         self.calls = []
+        self.origins = []
 
-    def inject(self, text):
+    def inject(self, text, origin_prefix=True):
         self.calls.append(text)
+        self.origins.append(origin_prefix)
         if self.errors:
             raise self.errors.pop(0)
 
@@ -246,9 +248,36 @@ def test_worker_text_path_strips_begins_turn_and_injects_control_chars(tmp_path)
     lane._submit_inbound_update(inbox.pending()[0].update, rid)
     lane._inbound_queue.join()
     assert lane._session.calls == [text]
+    assert lane._session.origins == [True]
     assert lane._turn_from_tg is True
     assert inbox.pending() == []
     lane._stop.set()
+
+
+def test_control_send_prefix_survives_durable_replay_and_keeps_reply_forwarding(tmp_path):
+    lane = make_lane(tmp_path)
+    update, _record_id = lane.store_control_text("automated prompt", 8, automatic=True)
+    inbox = lane._ensure_inbox()
+    replayed = inbox.pending()[0].update
+    assert replayed["_a2tt_control_send"] is True
+    lane._submit_inbound_update(replayed, inbox.pending()[0].record_id)
+    lane._inbound_queue.join()
+    assert lane._session.calls == ["[TG][AUTO] automated prompt"]
+    assert lane._turn_from_tg is True
+    forwarded = []
+    lane._owner_chat = 44
+    lane._send_final = lambda text, **kwargs: forwarded.append(text)
+    lane._handle_event(type("Event", (), {
+        "kind": "text", "text": "automated reply", "final": True, "key": "reply",
+    })())
+    assert forwarded == ["automated reply"]
+
+    normal = make_lane(tmp_path / "normal")
+    assert normal._handle({"message": {"text": "human prompt"}}) is True
+    assert normal._session.calls == ["human prompt"]
+    assert normal._session.origins == [True]
+    lane._stop.set()
+    normal._stop.set()
 
 
 def test_text_prompt_limit_and_whitespace_are_applied_before_injection(tmp_path):
