@@ -268,6 +268,7 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 | `elevenlabs_api_key` | `""` | ElevenLabs key (**secret**). If empty, the `ELEVENLABS_API_KEY` environment variable is used |
 | `elevenlabs_api_key_keychain` | | macOS only: Keychain item for the ElevenLabs key, same form as `token_keychain`; not together with `elevenlabs_api_key` |
 | `elevenlabs_language` | `""` | Language hint for transcription (empty = auto-detect) |
+| `stt_fallback_cmd` | `[]` | Optional argv for a local transcription command; the audio path is appended when ElevenLabs fails |
 | `tts_voice_id` | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice for spoken replies |
 | `tts_model_id` | `eleven_turbo_v2_5` | ElevenLabs TTS model |
 | `tts_speed` | `1.25` | Playback speed of spoken replies (0.5 to 2.0); applied by ffmpeg, whichever speech engine is used |

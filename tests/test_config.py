@@ -84,6 +84,7 @@ def test_elevenlabs_key_comes_from_environment_when_not_in_file(monkeypatch):
     {"tts_speed": True},
     {"background_progress": "yes"}, {"background_progress": 1},
     {"inbound_sender_label": "yes"}, {"inbound_sender_label": 0},
+    {"stt_fallback_cmd": "python3 script.py"},
     {"agent": "other"}, {"allowed_user_ids": []}, {"allowed_user_ids": ["7"]}, {"token": ""},
     {"claude_cmd": ""},
 ])

@@ -22,6 +22,7 @@ class Config:
     hooks_settings_path: str | None = None
     elevenlabs_api_key: str = ""
     elevenlabs_language: str = ""
+    stt_fallback_cmd: list[str] = field(default_factory=list)
     tts_speed: float = 1.25
     tts_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
     tts_model_id: str = "eleven_turbo_v2_5"
@@ -60,6 +61,9 @@ class Config:
             raise ValueError("'background_progress' must be a boolean.")
         if type(self.inbound_sender_label) is not bool:
             raise ValueError("'inbound_sender_label' must be a boolean.")
+        if (not isinstance(self.stt_fallback_cmd, list)
+                or any(not isinstance(item, str) or not item.strip() for item in self.stt_fallback_cmd)):
+            raise ValueError("'stt_fallback_cmd' must be a list of non-empty strings.")
 
 
 APP_DIRNAME = ".agent2telegramtopic"
@@ -68,12 +72,12 @@ APP_DIRNAME = ".agent2telegramtopic"
 _OPTIONAL_KEYS = {"token", "token_keychain", "elevenlabs_api_key_keychain", "elevenlabs_api_key", "elevenlabs_language", "tts_speed", "tts_voice_id",
                   "tts_model_id", "tts_url", "tts_params", "tts_timeout", "file_marker", "outbox_dirs",
                   "background_progress", "inbound_sender_label", "max_live_lanes", "idle_compact_minutes",
-                  "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir"}
+                  "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir", "stt_fallback_cmd"}
 _REQUIRED_KEYS = {"agent", "allowed_user_ids", "bot_username"}
 _FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
                "tts_timeout", "file_marker",
                "outbox_dirs", "background_progress", "inbound_sender_label", "max_live_lanes",
-               "idle_compact_minutes", "compact_min_tokens"}
+               "idle_compact_minutes", "compact_min_tokens", "stt_fallback_cmd"}
 
 
 #: Names the config file of one bridge instance (the ``--config`` option sets it for this process

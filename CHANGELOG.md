@@ -6,6 +6,7 @@ All notable changes are documented here, following [Keep a Changelog](https://ke
 
 ### Added
 - Add tap-to-answer buttons to agent replies using the `[tg-buttons]` marker.
+- Add `stt_fallback_cmd`: a local transcription command used when ElevenLabs transcription fails; the agent sees the transcript marked as a local fallback.
 
 ## [0.4.0] - 2026-11-10
 

@@ -52,6 +52,8 @@ BOT_COMMANDS = [
     {"command": "id", "description": "Show your Telegram id"},
     {"command": "close", "description": "Archive this topic (summary saved; writing again resumes)"},
 ]
+STT_FALLBACK_TIMEOUT = 300
+LOCAL_FALLBACK_PREFIX = "[voice transcript (local fallback, ElevenLabs failed) – may contain recognition errors]"
 BUTTONS_MARKER = "[tg-buttons]"
 
 NEW_TOPIC_HINT = (
@@ -711,7 +713,8 @@ class LaneBridge:
             text = self._transcribe(message.get("voice") or message.get("audio"), self.key.chat_id) or text
             if not text:
                 return True
-            text = f"[voice transcript – may contain recognition errors]\n{text}"
+            if not text.startswith(LOCAL_FALLBACK_PREFIX + "\n"):
+                text = f"[voice transcript – may contain recognition errors]\n{text}"
         elif message.get("photo") or message.get("document"):
             note = self._download_note(message, self.key.chat_id)
             if not note:
@@ -1057,9 +1060,46 @@ class LaneBridge:
                 self._reject_audio_too_large(chat_id, len(audio))
                 log.warning("downloaded voice/audio too large for STT: %s bytes", len(audio))
                 return None
-            return stt.transcribe(audio, api_key=self._elevenlabs_key(),
-                                  language=getattr(self.cfg, "elevenlabs_language", "") or None,
-                                  filename=Path(fp).name or "voice.ogg")
+            try:
+                return stt.transcribe(audio, api_key=self._elevenlabs_key(),
+                                      language=getattr(self.cfg, "elevenlabs_language", "") or None,
+                                      filename=Path(fp).name or "voice.ogg")
+            except stt.EmptyTranscript:
+                raise
+            except Exception as exc:
+                fallback_cmd = getattr(self.cfg, "stt_fallback_cmd", [])
+                if not fallback_cmd:
+                    raise
+                log.warning("ElevenLabs transcription failed (%s); using local fallback", exc)
+                suffix = Path(fp).suffix
+                temp_path = None
+                try:
+                    fd, temp_name = tempfile.mkstemp(suffix=suffix)
+                    temp_path = Path(temp_name)
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(audio)
+                    env = os.environ.copy()
+                    language = getattr(self.cfg, "elevenlabs_language", "")
+                    if language:
+                        env["A2TT_STT_LANGUAGE"] = language
+                    completed = subprocess.run(
+                        [*fallback_cmd, str(temp_path)], capture_output=True, text=True,
+                        encoding="utf-8", env=env, timeout=STT_FALLBACK_TIMEOUT, check=False,
+                    )
+                    if completed.returncode != 0:
+                        raise RuntimeError(f"exit {completed.returncode}: {completed.stderr[:300]}")
+                    fallback_text = completed.stdout.strip()
+                    if not fallback_text:
+                        raise RuntimeError(f"empty stdout: {completed.stderr[:300]}")
+                    return f"{LOCAL_FALLBACK_PREFIX}\n{fallback_text}"
+                except Exception as fallback_exc:
+                    stderr = getattr(fallback_exc, "stderr", "")
+                    log.warning("local STT fallback failed: %s%s", fallback_exc,
+                                f"; stderr: {stderr[:300]}" if stderr else "")
+                    raise exc
+                finally:
+                    if temp_path is not None:
+                        temp_path.unlink(missing_ok=True)
         except stt.EmptyTranscript:
             log.warning("voice note had no speech")
             self._send_final(
