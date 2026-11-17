@@ -7,6 +7,7 @@ All notable changes are documented here, following [Keep a Changelog](https://ke
 ### Added
 - Add tap-to-answer buttons to agent replies using the `[tg-buttons]` marker.
 - Add `stt_fallback_cmd`: a local transcription command used when ElevenLabs transcription fails; the agent sees the transcript marked as a local fallback.
+- Add stall recovery for Claude Code lanes: when a session makes no transcript progress, the inactivity notice now says what the agent was last doing and since when; after `stall_restart_s` (default 900 s, 0 disables) the session is restarted and resumed, and the unanswered messages are resent with a short note to the agent.
 
 ## [0.4.0] - 2026-11-10
 

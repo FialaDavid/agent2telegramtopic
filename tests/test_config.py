@@ -26,6 +26,7 @@ def test_config_defaults():
     assert config.outbox_dirs == []
     assert config.background_progress is True
     assert config.inbound_sender_label is False
+    assert config.stall_restart_s == 900
 
 
 FAKE_TOKEN = "1234567:fake-token-for-tests-only-aaaaaaaaaaaa"
@@ -71,6 +72,12 @@ def test_build_config_maps_file_to_config():
     assert (cfg.bot_name, cfg.agent_kind, cfg.allowed_users) == ("example_bot", "claude-code", frozenset({42}))
     assert cfg.max_live_lanes == 2 and cfg.tts_speed == 1.0
     assert cfg.claude_cmd == ("claude", "--model", "sonnet")
+
+
+def test_stall_restart_config_is_validated():
+    assert build_config(minimal(stall_restart_s=0)).stall_restart_s == 0
+    with pytest.raises(ValueError):
+        build_config(minimal(stall_restart_s=-1))
 
 
 def test_elevenlabs_key_comes_from_environment_when_not_in_file(monkeypatch):

@@ -289,6 +289,8 @@ writes the first four keys; everything else is optional. Unknown keys are reject
 Everything the bridge owns lives under `~/.agent2telegramtopic/`: `config.json`, `state/`
 (queues, offsets, per-topic state), `topics/`, `logs/`, `tmux/`.
 
+For Claude Code lanes, `stall_restart_s` controls automatic session recovery after a stall notice. It defaults to 900 seconds without transcript or sub-agent transcript growth; set it to `0` to keep the diagnostic notice while disabling restart.
+
 ## Custom speech endpoint
 
 Spoken replies come from ElevenLabs unless `tts_url` is set. With it, every spoken reply is one

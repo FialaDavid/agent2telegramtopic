@@ -37,6 +37,7 @@ class Config:
     # notification). On by default; set false to keep the chat quiet.
     background_progress: bool = True
     inbound_sender_label: bool = False  # display sender/chat after origin_prefix
+    stall_restart_s: int = 900
 
     def __post_init__(self) -> None:
         if self.agent_kind not in {"claude-code", "codex"}:
@@ -61,6 +62,8 @@ class Config:
             raise ValueError("'background_progress' must be a boolean.")
         if type(self.inbound_sender_label) is not bool:
             raise ValueError("'inbound_sender_label' must be a boolean.")
+        if type(self.stall_restart_s) is not int or self.stall_restart_s < 0:
+            raise ValueError("'stall_restart_s' must be a non-negative integer.")
         if (not isinstance(self.stt_fallback_cmd, list)
                 or any(not isinstance(item, str) or not item.strip() for item in self.stt_fallback_cmd)):
             raise ValueError("'stt_fallback_cmd' must be a list of non-empty strings.")
@@ -72,12 +75,12 @@ APP_DIRNAME = ".agent2telegramtopic"
 _OPTIONAL_KEYS = {"token", "token_keychain", "elevenlabs_api_key_keychain", "elevenlabs_api_key", "elevenlabs_language", "tts_speed", "tts_voice_id",
                   "tts_model_id", "tts_url", "tts_params", "tts_timeout", "file_marker", "outbox_dirs",
                   "background_progress", "inbound_sender_label", "max_live_lanes", "idle_compact_minutes",
-                  "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir", "stt_fallback_cmd"}
+                  "compact_min_tokens", "claude_cmd", "codex_cmd", "workdir", "stt_fallback_cmd", "stall_restart_s"}
 _REQUIRED_KEYS = {"agent", "allowed_user_ids", "bot_username"}
 _FIELD_KEYS = {"elevenlabs_language", "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
                "tts_timeout", "file_marker",
                "outbox_dirs", "background_progress", "inbound_sender_label", "max_live_lanes",
-               "idle_compact_minutes", "compact_min_tokens", "stt_fallback_cmd"}
+               "idle_compact_minutes", "compact_min_tokens", "stt_fallback_cmd", "stall_restart_s"}
 
 
 #: Names the config file of one bridge instance (the ``--config`` option sets it for this process

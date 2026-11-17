@@ -354,7 +354,7 @@ class LaneBridge:
             for name in ("bot_name", "elevenlabs_api_key", "elevenlabs_language",
                          "tts_speed", "tts_voice_id", "tts_model_id", "tts_url", "tts_params",
                          "tts_timeout", "file_marker", "outbox_dirs", "background_progress", "inbound_sender_label",
-                         "claude_cmd"):
+                         "claude_cmd", "stall_restart_s"):
                 setattr(self, name, getattr(config, name))
         if getattr(self, "bot_name", None):
             _BOT_ELEVENLABS_KEYS.setdefault(self.bot_name, getattr(self, "elevenlabs_api_key", ""))
@@ -375,6 +375,14 @@ class LaneBridge:
         self._turn_started_wall = time.time()
         self._last_activity = time.monotonic()
         self._last_activity_wall = time.time()
+        self._stall_restart_s = getattr(config, "stall_restart_s", 900)
+        self._stall_progress_wall = time.time()
+        self._stall_armed = False
+        self._stall_state = "idle"
+        self._stall_since = self._stall_progress_wall
+        self._stall_messages = []
+        self._subagent_sizes = {}
+        self._inactivity_stall_notice = None
         self._silence_notice_sent = False
         self._turn_started = self._last_activity
         self._turn_begun_at = self._last_activity
@@ -747,6 +755,8 @@ class LaneBridge:
                 delivered = self._inject(text, origin_prefix=False)
             else:
                 delivered = self._inject(text)
+            if delivered:
+                self._remember_stall_message(upd)
             if delivered and name_topic_pending:
                 self._lane_store.clear_new_topic(self.key)
             if not delivered:
@@ -759,6 +769,18 @@ class LaneBridge:
             if self._lane_store is not None:
                 self._lane_store.set_busy(self.key, False)
             raise
+
+    def _remember_stall_message(self, upd: dict) -> None:
+        if upd.get("message_reaction") or upd.get("_a2tt_control_send"):
+            return
+        message = upd.get("message") or upd.get("edited_message") or {}
+        if not (self._turn_active.is_set() or self._stall_armed):
+            return
+        if not any(message.get(key) for key in ("text", "caption", "voice", "audio", "photo", "document")):
+            return
+        self._stall_messages.append({"chat_id": message.get("chat", {}).get("id", self.key.chat_id),
+            "message_id": message.get("message_id"), "text": message.get("text", ""), "update": upd})
+        self._stall_messages = self._stall_messages[-20:]
 
     # Ported from agent2telegram attach.py:1906 (MIT); Delta: the config file stores the ElevenLabs key.
     def _handle_command(self, text: str, chat_id: int, message_id: int | None = None) -> bool:
@@ -1716,6 +1738,7 @@ class LaneBridge:
         if nl == -1:
             return
         consumed = 0
+        transcript_progress = False
         try:
             for raw in chunk[:nl].split(b"\n"):
                 rec_off = self._tpos + consumed
@@ -1727,6 +1750,23 @@ class LaneBridge:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if self.agent == "claude-code" and rec.get("type") in {"assistant", "user", "system", "api-request"}:
+                    transcript_progress = True
+                    self._stall_progress_wall = time.time()
+                    if not getattr(self, "_stall_queue_outstanding", 0):
+                        self._stall_messages.clear()
+                    if self._stall_armed:
+                        log.warning("stall disarmed lane=%s state=%s", self.key, self._stall_state)
+                        self._stall_armed = False
+                elif self.agent == "claude-code" and rec.get("type") == "queue-operation":
+                    operation = rec.get("operation")
+                    outstanding = getattr(self, "_stall_queue_outstanding", 0)
+                    if operation == "enqueue":
+                        self._stall_queue_outstanding = outstanding + 1
+                    elif operation in {"dequeue", "remove"}:
+                        self._stall_queue_outstanding = max(0, outstanding - 1)
+                        if not self._stall_queue_outstanding:
+                            self._stall_messages.clear()
                 if self._internal_turn and self._internal_kind == "compact" and self.agent == "codex":
                     payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
                     if (rec.get("type") == "system" and rec.get("subtype") == "local_command"
@@ -1780,7 +1820,7 @@ class LaneBridge:
                 and self._compact_done.exists()):
             self._internal_compaction_succeeded = True
             self._finish_turn()
-        if self._turn_from_tg:
+        if self._turn_from_tg and (self.agent != "claude-code" or transcript_progress):
             self._last_activity = time.monotonic()
             self._last_activity_wall = time.time()
 
@@ -1982,9 +2022,27 @@ class LaneBridge:
                           self._signal is not None)
                 # SPEC v0.4 step 7 requires one empty-turn notice; do not mark that notice as
                 # the agent's answer, so a later turn-end retry cannot mistake it for one.
-                self._send_final(
-                    "⚠️ The agent ended this turn without an answer. Please send your message again.",
-                    turn_text=False)
+                if self.agent == "claude-code" and self._inactivity_stall_notice:
+                    state, since = self._inactivity_stall_notice
+                    mins = max(1, int(self._idle_limit() // 60))
+                    remaining = max(0, self._stall_restart_s - (time.time() - self._stall_progress_wall))
+                    restart_clause = (f"If it does not recover in {int((remaining + 59) // 60)} min "
+                                      "I will restart the session and resend your unanswered messages."
+                                      if self._stall_restart_s else
+                                      "Automatic session restart is disabled.")
+                    self._send_final(
+                        f"⚠️ No progress from the agent for {mins} min (last: {state} since "
+                        f"{datetime.fromtimestamp(since).astimezone():%H:%M local}). {restart_clause}",
+                        turn_text=False)
+                    self._stall_armed = True
+                    self._stall_state, self._stall_since = state, since
+                    self._subagent_sizes = self._current_subagent_sizes()
+                    log.warning("stall armed lane=%s state=%s", self.key, state)
+                else:
+                    self._send_final(
+                        "⚠️ The agent ended this turn without an answer. Please send your message again.",
+                        turn_text=False)
+                self._inactivity_stall_notice = None
         elif (not internal and not passthrough_command and was_active and self._turn_from_tg and not self._turn_text_sent
                 and self._owner_chat is not None
                 and not self._turn_is_reaction):
@@ -2461,6 +2519,7 @@ class LaneBridge:
             self._maybe_reresolve()
             self._flush_pending()
             self._drain_transcript()
+            self._poll_subagent_progress()
             if self._internal_turn:
                 self._consume_signal_text()
             else:
@@ -2490,13 +2549,21 @@ class LaneBridge:
                   and self._turn_end.exists()):
                 self._claude_hook_ready = True
                 self._end_turn()
+                self._stall_queue_outstanding = 0
+                self._stall_messages.clear()
             elif (not self._internal_turn and self._turn_active.is_set()
                   and time.monotonic() - self._last_activity > self._idle_limit()):
                 log.warning("turn ended after inactivity (%.0f s without activity); no hook signal",
                             self._idle_limit())
                 if self.agent == "claude-code":
                     self._claude_hook_ready = False
+                    self._inactivity_stall_notice = (self._stall_diagnostic()
+                        if self._turn_from_tg and not self._turn_is_reaction else None)
                 self._end_turn()
+                self._inactivity_stall_notice = None
+            self._stall_recovery_tick()
+            if self._stop.is_set():
+                return
             # Live retry: messages that failed to deliver are retried while running too.
             # Replay only at startup meant, for a long-running service, waiting forever.
             # An outbound-only startup recovery can run before a parked lane gets a
@@ -2533,6 +2600,101 @@ class LaneBridge:
 
     def _idle_limit(self) -> float:
         return IDLE_DONE_HOOKED if self._turn_end is not None else IDLE_DONE
+
+    def _stall_diagnostic(self):
+        state = "idle"
+        result_ids = set()
+        records = []
+        try:
+            with self._transcript.open("r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    records.append(rec)
+            for rec in records:
+                if rec.get("type") == "user":
+                    for block in (rec.get("message", {}).get("content") or []):
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            result_ids.add(block.get("tool_use_id"))
+            last = next((rec for rec in reversed(records) if rec.get("type") in {"assistant", "user", "system", "api-request"}), None)
+            if last is not None:
+                stamp = _record_wall_time(last) or self._stall_progress_wall
+                if last.get("type") == "api-request":
+                    return "waiting for a model reply", stamp
+                if last.get("type") == "assistant":
+                    for block in reversed(last.get("message", {}).get("content") or []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") not in result_ids:
+                            return f"running tool {block.get('name', 'unknown')}", stamp
+                return "idle", stamp
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return state, self._stall_progress_wall
+
+    def _current_subagent_sizes(self):
+        subagents = self._transcript.parent / self._transcript.stem / "subagents" if self._transcript else None
+        if not subagents or not subagents.is_dir():
+            return {}
+        sizes = {}
+        for path in subagents.glob("*.jsonl"):
+            try:
+                sizes[path] = path.stat().st_size
+            except OSError:
+                continue
+        return sizes
+
+    def _poll_subagent_progress(self):
+        if self.agent != "claude-code" or not self._transcript:
+            return
+        subagents = self._transcript.parent / self._transcript.stem / "subagents"
+        if not subagents.is_dir():
+            return
+        for path in subagents.glob("*.jsonl"):
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            previous = self._subagent_sizes.get(path)
+            self._subagent_sizes[path] = size
+            if previous is None or size > previous:
+                now = time.time()
+                self._stall_progress_wall = now
+                if self._stall_armed:
+                    log.warning("stall disarmed lane=%s state=%s subagent_progress=true", self.key, self._stall_state)
+                    self._stall_armed = False
+                if not getattr(self, "_stall_queue_outstanding", 0):
+                    self._stall_messages.clear()
+
+    def _stall_recovery_tick(self):
+        if not self._stall_armed or self.agent != "claude-code":
+            return
+        if self._dialog is not None:
+            return
+        if not self._stall_restart_s or time.time() - self._stall_progress_wall < self._stall_restart_s:
+            return
+        state, since = self._stall_state, self._stall_since
+        log.warning("stall recovery starting lane=%s state=%s", self.key, state)
+        if not self.restart_session():
+            log.warning("stall recovery failed lane=%s state=%s", self.key, state)
+            self._stall_armed = False
+            return
+        submitted = 0
+        control = f"[a2tt] Your session was restarted after a stall ({state} since {datetime.fromtimestamp(since).astimezone():%H:%M}). Continue the interrupted task and answer the user's last request."
+        self.store_control_text(control, 0, automatic=True)
+        for item in self._stall_messages:
+            update = dict(item["update"])
+            update["update_id"] = time.time_ns()
+            inbox = self._ensure_inbox()
+            record_id = inbox.reserve(update) if inbox is not None else None
+            if record_id:
+                submitted += 1
+        self.tg.send_message(self.key.chat_id,
+            f"🔄 Agent was stuck ({state} since {datetime.fromtimestamp(since).astimezone():%H:%M}). "
+            f"Session restarted and resumed; resending {submitted} unanswered message(s).")
+        log.warning("stall recovery complete lane=%s state=%s resent=%d", self.key, state, submitted)
+        self._stall_armed = False
+        self._stall_messages.clear()
 
     def _mark_sent(self, uuid: str) -> bool:
         """Record a delivered message uuid in memory and on disk. Returns whether the disk write
