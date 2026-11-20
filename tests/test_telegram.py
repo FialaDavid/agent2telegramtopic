@@ -148,6 +148,27 @@ def test_split_message_prefers_paragraph_line_and_word_boundaries():
     assert all(len(chunk) <= MAX_MESSAGE_LEN for chunk in chunks)
 
 
+def test_split_message_moves_fenced_block_to_next_chunk():
+    block = "```text\n" + ("line\n\n" * 500) + "```"
+    text = "prose " + ("p" * 1300) + "\n## before\n\n" + block + "\n\n## heading after\n**bold**"
+    chunks = split_message(text)
+    assert len(chunks[0]) <= MAX_MESSAGE_LEN
+    assert "```" not in chunks[0]
+    assert block in chunks[1]
+    assert "## heading after\n**bold**" in chunks[1]
+    assert all(chunk.count("```") % 2 == 0 for chunk in chunks)
+
+
+def test_split_message_reopens_oversized_fenced_block():
+    block = "```text\n" + ("x" * 9000) + "\n```"
+    chunks = split_message(block)
+    assert len(chunks) >= 3
+    assert all(len(chunk) <= MAX_MESSAGE_LEN for chunk in chunks)
+    assert all(chunk.count("```") == 2 for chunk in chunks)
+    assert all(chunk.startswith("```text\n") for chunk in chunks)
+    assert "".join(chunk.split("\n", 1)[1].rsplit("\n```", 1)[0] for chunk in chunks) == "x" * 9000
+
+
 def test_rich_400_falls_back_to_html_and_preserves_topic_on_every_call():
     calls = []
     responses = iter([

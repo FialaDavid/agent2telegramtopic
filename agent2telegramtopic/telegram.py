@@ -241,6 +241,43 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
     chunks: list[str] = []
     remaining = text
     while len(remaining) > limit:
+        # If a fence starts the remaining text, keep a fitting block intact or
+        # split an oversized block with a matching close/reopen line per chunk.
+        lines = remaining.splitlines(keepends=True)
+        fence = None
+        offset = 0
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                marker = "```" if stripped.startswith("```") else "~~~"
+                if fence is None:
+                    fence = (i, offset, marker, line.rstrip("\r\n"))
+                elif marker == fence[2]:
+                    fence = (fence[0], fence[1], marker, fence[3], offset + len(line))
+                    break
+            offset += len(line)
+        if fence and fence[0] == 0 and len(fence) == 5:
+            start, _, marker, opener, end = fence
+            block = remaining[:end]
+            if len(block) <= limit:
+                chunks.append(block.rstrip("\n"))
+                remaining = remaining[end:].lstrip("\n")
+                continue
+            close = marker
+            body = remaining[len(lines[0]):end-len(lines[next(i for i, line in enumerate(lines) if line.lstrip().startswith(marker) and i > 0)])]
+            capacity = limit - len(opener) - len(close) - 2
+            if capacity <= 0:
+                capacity = limit - len(opener) - len(close) - 1
+            while body:
+                take = min(capacity, len(body))
+                if take < len(body):
+                    boundary = body.rfind("\n", 0, take + 1)
+                    if boundary > take * 0.5:
+                        take = boundary + 1
+                part, body = body[:take], body[take:]
+                chunks.append(opener + "\n" + part.rstrip("\n") + "\n" + close)
+            remaining = remaining[end:].lstrip("\n")
+            continue
         window = remaining[:limit]
         # Prefer the latest natural boundary inside the window.
         for sep in ("\n\n", "\n", " "):
@@ -250,6 +287,23 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
         else:
             cut = limit                  # no good boundary: hard cut
         cut = cut if cut > 0 else limit
+        # Detect whether the proposed boundary lies after an opener and before
+        # its matching close. If possible, move the whole block to next chunk.
+        offset = 0
+        opened = None
+        for line in remaining.splitlines(keepends=True):
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                marker = "```" if stripped.startswith("```") else "~~~"
+                if opened is None:
+                    opened = offset
+                elif marker == ("```" if remaining[opened:].lstrip().startswith("```") else "~~~"):
+                    if opened < cut < offset + len(line):
+                        if opened > 0:
+                            cut = opened
+                        break
+                    opened = None
+            offset += len(line)
         chunks.append(remaining[:cut].rstrip("\n"))
         remaining = remaining[cut:].lstrip("\n")
     if remaining:
